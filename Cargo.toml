@@ -1,0 +1,48 @@
+[package]
+name = "sig-rust"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "sig_rust"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ndarray = "0.16"
+num-complex = "0.4"
+pyo3 = { version = "0.25", features = ["extension-module"] }
+numpy = "0.25"
+rayon = "1.10"
+thiserror = "2"
+
+[dev-dependencies]
+approx = "0.5"
+rand = "0.9"
+rand_chacha = "0.9"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "allow"
+panic = "deny"
+panic_in_result_fn = "deny"
+unimplemented = "deny"
+allow_attributes = "allow"
+dbg_macro = "deny"
+todo = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+await_holding_lock = "deny"
+large_futures = "deny"
+exit = "deny"
+mem_forget = "deny"
+module_name_repetitions = "allow"
+similar_names = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
