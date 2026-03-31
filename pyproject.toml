@@ -1,0 +1,61 @@
+[project]
+name = "sig-rust"
+version = "0.1.0"
+description = "Fast path signature computation in Rust with Python bindings"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=2.0"]
+
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "sig_rust._lib"
+
+[dependency-groups]
+dev = [
+    "maturin",
+    "numpy>=2.0",
+    "pytest",
+    "ruff",
+    "sig-light>=0.2.5",
+    "ty",
+]
+test = [
+    "iisignature",
+    "numpy>=2.0",
+    "pytest",
+    "setuptools",
+]
+
+[tool.uv]
+package = true
+
+[tool.uv.extra-build-dependencies]
+iisignature = ["numpy"]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+target-version = "py310"
+include = ["python/**/*.py", "scripts/**/*.py"]
+
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "double"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+docstring-code-format = false
+docstring-code-line-length = "dynamic"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "RUF", "SIM"]
+ignore = []
+fixable = ["ALL"]
+unfixable = []
