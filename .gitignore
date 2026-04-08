@@ -63,6 +63,7 @@ dmypy.json
 # Rust
 /target
 **/*.rs.bk
+.cargo/
 
 # IDE
 .idea/
