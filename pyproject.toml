@@ -1,6 +1,6 @@
 [project]
 name = "sig-rust"
-version = "0.1.0"
+version = "0.1.1"
 description = "Fast path signature computation in Rust with Python bindings"
 readme = "README.md"
 requires-python = ">=3.10"

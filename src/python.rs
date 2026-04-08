@@ -769,7 +769,7 @@ fn py_rotinv2dcoeffs(py: Python<'_>, s: &PyRotInv2DPreparedData) -> PyResult<Py<
 
 #[pyfunction(name = "version")]
 fn py_version() -> String {
-    "0.1.0".to_string()
+    "0.1.1".to_string()
 }
 
 // ---------------------------------------------------------------------------
