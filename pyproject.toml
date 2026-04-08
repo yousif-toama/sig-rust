@@ -41,6 +41,10 @@ iisignature = ["numpy"]
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
 
+[tool.ty.src]
+include = ["python"]
+exclude = ["scripts/**"]
+
 [tool.ruff]
 line-length = 88
 indent-width = 4

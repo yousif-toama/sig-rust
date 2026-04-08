@@ -671,7 +671,7 @@ class TestRotinv2dcoeffs:
 # === Cross-validation against iisignature (if available) ===
 
 try:
-    import iisignature
+    import iisignature  # ty: ignore[unresolved-import]
 
     HAS_IISIG = True
 except ImportError:

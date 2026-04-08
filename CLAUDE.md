@@ -4,26 +4,36 @@ Rust port of sig-light: path signature and log signature computation with PyO3 b
 
 ## Build Commands
 
+Requires [just](https://github.com/casey/just) for task running.
+
 ```bash
-# Rust
-cargo build                    # Build Rust library
-cargo test                     # Run Rust tests
-cargo clippy --all-targets --all-features -- -D warnings  # Lint
-cargo fmt --check              # Format check
-cargo llvm-cov --lcov --output-path rust-lcov.info  # Test with coverage
+just sync                  # Install all dependencies
+just build                 # Build native extension (maturin develop --release)
+just check                 # Run all checks (Rust + Python)
+just rust-check            # Rust only: fmt, clippy, test
+just python-check          # Python only: ruff, ty, pytest
+just format-all            # Auto-format everything
+just test-cov-all          # Full coverage (Rust + Python)
+just bench                 # Quick benchmark vs iisignature
+just bench-full            # Full profiling suite
+```
 
-# Python
-uv sync --all-extras --group dev  # Install all dependencies
-uv run maturin develop --release  # Build + install Python wheel
-uv run pytest                     # Run Python tests
-uv run ruff check .               # Python lint
-uv run ruff format --check .      # Python format check
-uv run ty check                   # Python type check
-uv run pytest --cov=python/sig_rust --cov-report=term-missing  # Test with coverage
+Individual commands:
 
-# Benchmarks
-uv run python scripts/benchmark.py       # Quick comparison vs iisignature
-uv run python scripts/benchmark_full.py  # Full profiling suite
+```bash
+just rust-test             # cargo test
+just rust-lint             # cargo clippy
+just rust-fmt-check        # cargo fmt --check
+just rust-fmt              # cargo fmt
+just rust-test-cov         # cargo llvm-cov
+
+just build                 # maturin develop --release
+just test                  # pytest
+just lint                  # ruff check
+just format-check          # ruff format --check
+just format                # ruff format
+just typecheck             # ty check
+just test-cov              # pytest --cov
 ```
 
 ## Architecture
