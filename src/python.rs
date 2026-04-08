@@ -90,7 +90,7 @@ fn py_sig<'py>(
     path: PyReadonlyArrayDyn<'py, f64>,
     m: usize,
     format: usize,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let shape = path.shape().to_vec();
 
     if shape.len() < 2 {
@@ -120,7 +120,7 @@ fn py_sig<'py>(
 
         let sl = siglength_fast(d, m);
         let work = batch_size * sl * (n - 1);
-        let results: Vec<Array1<f64>> = py.allow_threads(|| {
+        let results: Vec<Array1<f64>> = py.detach(|| {
             collect_par_or_seq(batch_size, work, |i| {
                 let path_i: Array2<f64> = flat_batch
                     .index_axis(Axis(0), i)
@@ -164,7 +164,7 @@ fn py_sig<'py>(
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
         .to_owned();
 
-    let result = py.allow_threads(|| signature::sig(&path_2d, depth, fmt));
+    let result = py.detach(|| signature::sig(&path_2d, depth, fmt));
 
     match result {
         SigResult::Flat(arr) => {
@@ -206,7 +206,7 @@ fn py_sigcombine<'py>(
     sig2: PyReadonlyArrayDyn<'py, f64>,
     d: usize,
     m: usize,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let dim = Dim::new(d).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let depth =
         Depth::new(m).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -228,7 +228,7 @@ fn py_sigcombine<'py>(
             .expect("reshape");
 
         let work = batch_size * sl;
-        let results: Vec<Array1<f64>> = py.allow_threads(|| {
+        let results: Vec<Array1<f64>> = py.detach(|| {
             collect_par_or_seq(batch_size, work, |i| {
                 let a = flat1
                     .index_axis(Axis(0), i)
@@ -253,7 +253,7 @@ fn py_sigcombine<'py>(
 
     let a = s1.into_dimensionality::<ndarray::Ix1>().expect("1d");
     let b = s2.into_dimensionality::<ndarray::Ix1>().expect("1d");
-    let result = py.allow_threads(|| signature::sigcombine(&a, &b, dim, depth));
+    let result = py.detach(|| signature::sigcombine(&a, &b, dim, depth));
     Ok(result.into_dyn().into_pyarray(py).into_any().unbind())
 }
 
@@ -293,7 +293,7 @@ fn py_logsig<'py>(
     py: Python<'py>,
     path: PyReadonlyArrayDyn<'py, f64>,
     s: &PyPreparedData,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let shape = path.shape().to_vec();
     let prepared = s.inner.clone();
 
@@ -309,7 +309,7 @@ fn py_logsig<'py>(
 
         let sl = siglength_fast(d, prepared.depth.value());
         let work = batch_size * sl * (n - 1);
-        let results: Vec<Array1<f64>> = py.allow_threads(|| {
+        let results: Vec<Array1<f64>> = py.detach(|| {
             collect_par_or_seq(batch_size, work, |i| {
                 let path_i: Array2<f64> = flat_batch
                     .index_axis(Axis(0), i)
@@ -334,7 +334,7 @@ fn py_logsig<'py>(
         .into_dimensionality::<ndarray::Ix2>()
         .expect("2d")
         .to_owned();
-    let result = py.allow_threads(|| logsignature::logsig(&path_2d, &prepared));
+    let result = py.detach(|| logsignature::logsig(&path_2d, &prepared));
     Ok(result.into_dyn().into_pyarray(py).into_any().unbind())
 }
 
@@ -344,7 +344,7 @@ fn py_logsig_expanded<'py>(
     py: Python<'py>,
     path: PyReadonlyArrayDyn<'py, f64>,
     s: &PyPreparedData,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let shape = path.shape().to_vec();
     let prepared = s.inner.clone();
 
@@ -360,7 +360,7 @@ fn py_logsig_expanded<'py>(
 
         let sl = siglength_fast(d, prepared.depth.value());
         let work = batch_size * sl * (n - 1);
-        let results: Vec<Array1<f64>> = py.allow_threads(|| {
+        let results: Vec<Array1<f64>> = py.detach(|| {
             collect_par_or_seq(batch_size, work, |i| {
                 let path_i: Array2<f64> = flat_batch
                     .index_axis(Axis(0), i)
@@ -384,7 +384,7 @@ fn py_logsig_expanded<'py>(
         .into_dimensionality::<ndarray::Ix2>()
         .expect("2d")
         .to_owned();
-    let result = py.allow_threads(|| logsignature::logsig_expanded(&path_2d, &prepared));
+    let result = py.detach(|| logsignature::logsig_expanded(&path_2d, &prepared));
     Ok(result.into_dyn().into_pyarray(py).into_any().unbind())
 }
 
@@ -403,7 +403,7 @@ fn py_sigbackprop<'py>(
     deriv: PyReadonlyArrayDyn<'py, f64>,
     path: PyReadonlyArrayDyn<'py, f64>,
     m: usize,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let depth =
         Depth::new(m).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let path_shape = path.shape().to_vec();
@@ -426,7 +426,7 @@ fn py_sigbackprop<'py>(
 
         let sl = siglength_fast(d, m);
         let work = batch_size * sl * (n - 1) * 5;
-        let results: Vec<Array2<f64>> = py.allow_threads(|| {
+        let results: Vec<Array2<f64>> = py.detach(|| {
             collect_par_or_seq(batch_size, work, |i| {
                 let p: Array2<f64> = flat_path
                     .index_axis(Axis(0), i)
@@ -463,7 +463,7 @@ fn py_sigbackprop<'py>(
         .into_dimensionality::<ndarray::Ix1>()
         .expect("1d")
         .to_owned();
-    let result = py.allow_threads(|| backprop::sigbackprop(&deriv_1d, &path_2d, depth));
+    let result = py.detach(|| backprop::sigbackprop(&deriv_1d, &path_2d, depth));
     Ok(result.into_dyn().into_pyarray(py).into_any().unbind())
 }
 
@@ -473,7 +473,7 @@ fn py_sigjacobian<'py>(
     py: Python<'py>,
     path: PyReadonlyArrayDyn<'py, f64>,
     m: usize,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let depth =
         Depth::new(m).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let path_2d: Array2<f64> = path
@@ -481,7 +481,7 @@ fn py_sigjacobian<'py>(
         .into_dimensionality::<ndarray::Ix2>()
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
         .to_owned();
-    let result = py.allow_threads(|| backprop::sigjacobian(&path_2d, depth));
+    let result = py.detach(|| backprop::sigjacobian(&path_2d, depth));
     Ok(result.into_dyn().into_pyarray(py).into_any().unbind())
 }
 
@@ -492,7 +492,7 @@ fn py_logsigbackprop<'py>(
     deriv: PyReadonlyArrayDyn<'py, f64>,
     path: PyReadonlyArrayDyn<'py, f64>,
     s: &PyPreparedData,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let path_shape = path.shape().to_vec();
     let deriv_shape = deriv.shape().to_vec();
     let prepared = s.inner.clone();
@@ -514,7 +514,7 @@ fn py_logsigbackprop<'py>(
 
         let sl = siglength_fast(d, prepared.depth.value());
         let work = batch_size * sl * (n - 1) * 5;
-        let results: Vec<Array2<f64>> = py.allow_threads(|| {
+        let results: Vec<Array2<f64>> = py.detach(|| {
             collect_par_or_seq(batch_size, work, |i| {
                 let p: Array2<f64> = flat_path
                     .index_axis(Axis(0), i)
@@ -551,7 +551,7 @@ fn py_logsigbackprop<'py>(
         .into_dimensionality::<ndarray::Ix1>()
         .expect("1d")
         .to_owned();
-    let result = py.allow_threads(|| backprop::logsigbackprop(&deriv_1d, &path_2d, &prepared));
+    let result = py.detach(|| backprop::logsigbackprop(&deriv_1d, &path_2d, &prepared));
     Ok(result.into_dyn().into_pyarray(py).into_any().unbind())
 }
 
@@ -565,7 +565,7 @@ fn py_sigjoin<'py>(
     d: usize,
     m: usize,
     #[allow(non_snake_case)] fixedLast: f64,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let dim = Dim::new(d).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let depth =
         Depth::new(m).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -585,7 +585,7 @@ fn py_sigjoin<'py>(
         Some(fixedLast)
     };
 
-    let result = py.allow_threads(|| transforms::sigjoin(&sig, &seg, dim, depth, fixed));
+    let result = py.detach(|| transforms::sigjoin(&sig, &seg, dim, depth, fixed));
     Ok(result.into_dyn().into_pyarray(py).into_any().unbind())
 }
 
@@ -600,7 +600,7 @@ fn py_sigjoinbackprop<'py>(
     d: usize,
     m: usize,
     #[allow(non_snake_case)] fixedLast: f64,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let dim = Dim::new(d).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let depth =
         Depth::new(m).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -625,8 +625,7 @@ fn py_sigjoinbackprop<'py>(
         Some(fixedLast)
     };
 
-    let result =
-        py.allow_threads(|| transforms::sigjoinbackprop(&dv, &sig, &seg, dim, depth, fixed));
+    let result = py.detach(|| transforms::sigjoinbackprop(&dv, &sig, &seg, dim, depth, fixed));
 
     match result {
         SigjoinGradient::WithoutFixed { dsig, dsegment } => {
@@ -661,7 +660,7 @@ fn py_sigscale<'py>(
     scales: PyReadonlyArrayDyn<'py, f64>,
     d: usize,
     m: usize,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let dim = Dim::new(d).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let depth =
         Depth::new(m).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -676,7 +675,7 @@ fn py_sigscale<'py>(
         .into_dimensionality::<ndarray::Ix1>()
         .expect("1d");
 
-    let result = py.allow_threads(|| transforms::sigscale(&sig, &sc, dim, depth));
+    let result = py.detach(|| transforms::sigscale(&sig, &sc, dim, depth));
     Ok(result.into_dyn().into_pyarray(py).into_any().unbind())
 }
 
@@ -689,7 +688,7 @@ fn py_sigscalebackprop<'py>(
     scales: PyReadonlyArrayDyn<'py, f64>,
     d: usize,
     m: usize,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let dim = Dim::new(d).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let depth =
         Depth::new(m).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -709,8 +708,7 @@ fn py_sigscalebackprop<'py>(
         .into_dimensionality::<ndarray::Ix1>()
         .expect("1d");
 
-    let (dsig, dscales) =
-        py.allow_threads(|| transforms::sigscalebackprop(&dv, &sig, &sc, dim, depth));
+    let (dsig, dscales) = py.detach(|| transforms::sigscalebackprop(&dv, &sig, &sc, dim, depth));
 
     let tuple = pyo3::types::PyTuple::new(
         py,
@@ -740,14 +738,14 @@ fn py_rotinv2d<'py>(
     py: Python<'py>,
     path: PyReadonlyArrayDyn<'py, f64>,
     s: &PyRotInv2DPreparedData,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let path_2d = path
         .as_array()
         .to_owned()
         .into_dimensionality::<ndarray::Ix2>()
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let result = py
-        .allow_threads(|| rotational::rotinv2d(&path_2d, &s.inner))
+        .detach(|| rotational::rotinv2d(&path_2d, &s.inner))
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     Ok(result.into_dyn().into_pyarray(py).into_any().unbind())
 }
@@ -758,7 +756,7 @@ fn py_rotinv2dlength(s: &PyRotInv2DPreparedData) -> usize {
 }
 
 #[pyfunction(name = "rotinv2dcoeffs")]
-fn py_rotinv2dcoeffs(py: Python<'_>, s: &PyRotInv2DPreparedData) -> PyResult<PyObject> {
+fn py_rotinv2dcoeffs(py: Python<'_>, s: &PyRotInv2DPreparedData) -> PyResult<Py<PyAny>> {
     let coeffs = rotational::rotinv2dcoeffs(&s.inner);
     let py_list = PyList::new(
         py,

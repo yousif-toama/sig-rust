@@ -10,8 +10,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 ndarray = "0.17"
 num-complex = "0.4"
-pyo3 = { version = "0.25", features = ["extension-module"] }
-numpy = "0.25"
+pyo3 = { version = "0.27", features = ["extension-module"] }
+numpy = "0.27"
 rayon = "1.10"
 thiserror = "2"
 
