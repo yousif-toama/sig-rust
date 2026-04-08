@@ -592,18 +592,18 @@ fn compositions(n: usize, k: usize) -> Vec<Vec<usize>> {
 // Compiled BCH executor
 // ---------------------------------------------------------------------------
 
-/// Execute the compiled BCH program for one segment (branchless FMA loop).
+/// Execute the compiled BCH program for one segment.
+///
+/// Batches consecutive ops that write to the same destination into a local
+/// accumulator to reduce memory traffic. Falls back to single-op execution
+/// when an op reads from its own destination (self-referencing).
 fn execute_compiled(logsig: &mut [f64], disp: &[f64], prog: &CompiledBch, values: &mut [f64]) {
     values[..prog.num_logsig].copy_from_slice(logsig);
     values[prog.num_logsig..prog.num_logsig + prog.num_disp].copy_from_slice(disp);
     values[prog.const_one_idx] = 1.0;
     values[prog.const_one_idx + 1..].fill(0.0);
 
-    // Branchless: every op is dest += coeff * a * b
-    for op in &prog.ops {
-        values[op.dest as usize] +=
-            op.coeff * values[op.src_a as usize] * values[op.src_b as usize];
-    }
+    execute_ops(&prog.ops, values);
 
     for (r, &temp_idx) in prog.output_temps.iter().enumerate() {
         if temp_idx != 0 {
@@ -612,6 +612,29 @@ fn execute_compiled(logsig: &mut [f64], disp: &[f64], prog: &CompiledBch, values
     }
     for i in 0..prog.num_disp {
         logsig[i] += disp[i];
+    }
+}
+
+/// Execute FMA ops with destination batching for reduced memory traffic.
+fn execute_ops(ops: &[FmaOp], values: &mut [f64]) {
+    let mut i = 0;
+    while i < ops.len() {
+        let dest = ops[i].dest;
+        let dest_idx = dest as usize;
+        let mut acc = values[dest_idx];
+        // Batch consecutive ops to the same dest when safe (no self-reference)
+        while i < ops.len() && ops[i].dest == dest && ops[i].src_a != dest && ops[i].src_b != dest {
+            let op = &ops[i];
+            acc += op.coeff * values[op.src_a as usize] * values[op.src_b as usize];
+            i += 1;
+        }
+        values[dest_idx] = acc;
+        // Handle self-referencing op if that's what stopped the batch
+        if i < ops.len() && ops[i].dest == dest {
+            let op = &ops[i];
+            values[dest_idx] += op.coeff * values[op.src_a as usize] * values[op.src_b as usize];
+            i += 1;
+        }
     }
 }
 
@@ -728,15 +751,12 @@ fn adjoint_compiled(
     dx: &mut [f64],
     dh: &mut [f64],
 ) {
-    // Recompute forward values (branchless)
+    // Recompute forward values
     values[..prog.num_logsig].copy_from_slice(x_before);
     values[prog.num_logsig..prog.num_logsig + prog.num_disp].copy_from_slice(disp);
     values[prog.const_one_idx] = 1.0;
     values[prog.const_one_idx + 1..].fill(0.0);
-    for op in &prog.ops {
-        values[op.dest as usize] +=
-            op.coeff * values[op.src_a as usize] * values[op.src_b as usize];
-    }
+    execute_ops(&prog.ops, values);
 
     // Backward through output: dout flows to corrections and level-1 addition
     let mut dvalues = vec![0.0; prog.num_values];

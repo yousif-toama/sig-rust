@@ -199,6 +199,19 @@ impl LevelList {
     pub fn fill_zero(&mut self) {
         self.data.fill(0.0);
     }
+
+    /// Negate even-indexed levels (0, 2, 4, ...) to compute S(-h) from S(h).
+    ///
+    /// For a segment signature where level index k stores `h^{tensor(k+1)}/(k+1)!`,
+    /// negating the displacement gives `(-1)^{k+1}` at each level. Even indices
+    /// (k=0,2,4,...) correspond to odd tensor powers and get negated.
+    pub fn negate_even_indexed_levels(&mut self) {
+        for k in (0..self.depth()).step_by(2) {
+            for val in self.level_mut(k) {
+                *val = -*val;
+            }
+        }
+    }
 }
 
 /// Batched level-list: `levels[k]` has shape `(batch_size, d^(k+1))`.

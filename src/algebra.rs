@@ -15,16 +15,9 @@ pub fn tensor_multiply(a: &LevelList, b: &LevelList) -> LevelList {
     let mut result = a.clone();
     result.add_assign(b);
 
-    for level_k in 0..m {
-        for i in 0..=level_k {
-            let j = level_k.wrapping_sub(1).wrapping_sub(i);
-            if j >= m {
-                continue;
-            }
-            // We need to borrow a.level(i) and b.level(j) immutably,
-            // but result.level_mut(level_k) mutably. Since a/b are
-            // separate from result, this is fine -- but we need to copy
-            // the input slices first since result borrows are separate.
+    for level_k in 1..m {
+        for i in 0..level_k {
+            let j = level_k - 1 - i;
             let a_i = a.level(i);
             let b_j = b.level(j);
             outer_accumulate(a_i, b_j, result.level_mut(level_k));
@@ -41,12 +34,9 @@ pub fn tensor_multiply_into(a: &LevelList, b: &LevelList, result: &mut LevelList
     let m = a.depth();
     result.set_sum(a, b);
 
-    for level_k in 0..m {
-        for i in 0..=level_k {
-            let j = level_k.wrapping_sub(1).wrapping_sub(i);
-            if j >= m {
-                continue;
-            }
+    for level_k in 1..m {
+        for i in 0..level_k {
+            let j = level_k - 1 - i;
             let a_i = a.level(i);
             let b_j = b.level(j);
             outer_accumulate(a_i, b_j, result.level_mut(level_k));
@@ -61,12 +51,9 @@ pub fn tensor_multiply_nil(a: &LevelList, b: &LevelList) -> LevelList {
     let depth = Depth::new(m).expect("m > 0");
     let mut result = LevelList::zeros(dim, depth);
 
-    for level_k in 0..m {
-        for i in 0..=level_k {
-            let j = level_k.wrapping_sub(1).wrapping_sub(i);
-            if j >= m {
-                continue;
-            }
+    for level_k in 1..m {
+        for i in 0..level_k {
+            let j = level_k - 1 - i;
             outer_accumulate(a.level(i), b.level(j), result.level_mut(level_k));
         }
     }
@@ -260,12 +247,9 @@ pub fn tensor_multiply_batch(lhs: &BatchedLevelList, rhs: &BatchedLevelList) -> 
         .map(|k| &lhs.levels[k] + &rhs.levels[k])
         .collect();
 
-    for (level_k, result_k) in result.iter_mut().enumerate() {
-        for i in 0..=level_k {
-            let j = level_k.wrapping_sub(1).wrapping_sub(i);
-            if j >= depth {
-                continue;
-            }
+    for (level_k, result_k) in result.iter_mut().enumerate().skip(1) {
+        for i in 0..level_k {
+            let j = level_k - 1 - i;
             for row in 0..batch {
                 outer_accumulate(
                     lhs.levels[i].row(row).as_slice().expect("contiguous"),
@@ -293,12 +277,9 @@ pub fn tensor_multiply_adjoint(
     let mut da = dresult.clone();
     let mut db = dresult.clone();
 
-    for level_k in 0..m {
-        for i in 0..=level_k {
-            let j = level_k.wrapping_sub(1).wrapping_sub(i);
-            if j >= m {
-                continue;
-            }
+    for level_k in 1..m {
+        for i in 0..level_k {
+            let j = level_k - 1 - i;
             let si = a.level_len(i);
             let sj = b.level_len(j);
             let dr = dresult.level(level_k);
@@ -324,12 +305,9 @@ pub fn tensor_multiply_nil_adjoint(
     let mut da = LevelList::zeros(dim, depth);
     let mut db = LevelList::zeros(dim, depth);
 
-    for level_k in 0..m {
-        for i in 0..=level_k {
-            let j = level_k.wrapping_sub(1).wrapping_sub(i);
-            if j >= m {
-                continue;
-            }
+    for level_k in 1..m {
+        for i in 0..level_k {
+            let j = level_k - 1 - i;
             let si = a.level_len(i);
             let sj = b.level_len(j);
             let dr = dresult.level(level_k);
