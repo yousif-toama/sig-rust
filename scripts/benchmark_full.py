@@ -146,14 +146,10 @@ def bench_sig_single() -> None:
             t_rust = _time(lambda p=path, m_=m: sig_rust.sig(p, m_))
             t_light = None
             if sig_light is not None:
-                t_light = _time(
-                    lambda p=path, m_=m: sig_light.sig(p, m_)
-                )
+                t_light = _time(lambda p=path, m_=m: sig_light.sig(p, m_))
             t_cpp = None
             if iisignature is not None:
-                t_cpp = _time(
-                    lambda p=path, m_=m: iisignature.sig(p, m_)
-                )
+                t_cpp = _time(lambda p=path, m_=m: iisignature.sig(p, m_))
             _print_row_3(label, t_rust, t_light, t_cpp)
 
 
@@ -171,21 +167,15 @@ def bench_logsig_single() -> None:
         for label, d, m, n in configs:
             path = rng.standard_normal((n, d))
             s_rust = sig_rust.prepare(d, m)
-            t_rust = _time(
-                lambda p=path, s=s_rust: sig_rust.logsig(p, s)
-            )
+            t_rust = _time(lambda p=path, s=s_rust: sig_rust.logsig(p, s))
             t_light = None
             if sig_light is not None:
                 s_light = sig_light.prepare(d, m)
-                t_light = _time(
-                    lambda p=path, s=s_light: sig_light.logsig(p, s)
-                )
+                t_light = _time(lambda p=path, s=s_light: sig_light.logsig(p, s))
             t_cpp = None
             if iisignature is not None:
                 s_cpp = iisignature.prepare(d, m)
-                t_cpp = _time(
-                    lambda p=path, s=s_cpp: iisignature.logsig(p, s)
-                )
+                t_cpp = _time(lambda p=path, s=s_cpp: iisignature.logsig(p, s))
             _print_row_3(label, t_rust, t_light, t_cpp)
 
 
@@ -204,23 +194,17 @@ def bench_sigbackprop_single() -> None:
             path = rng.standard_normal((n, d))
             deriv = rng.standard_normal(sig_rust.siglength(d, m))
             t_rust = _time(
-                lambda dr=deriv, p=path, m_=m: sig_rust.sigbackprop(
-                    dr, p, m_
-                )
+                lambda dr=deriv, p=path, m_=m: sig_rust.sigbackprop(dr, p, m_)
             )
             t_light = None
             if sig_light is not None:
                 t_light = _time(
-                    lambda dr=deriv, p=path, m_=m: sig_light.sigbackprop(
-                        dr, p, m_
-                    )
+                    lambda dr=deriv, p=path, m_=m: sig_light.sigbackprop(dr, p, m_)
                 )
             t_cpp = None
             if iisignature is not None:
                 t_cpp = _time(
-                    lambda dr=deriv, p=path, m_=m: iisignature.sigbackprop(
-                        dr, p, m_
-                    )
+                    lambda dr=deriv, p=path, m_=m: iisignature.sigbackprop(dr, p, m_)
                 )
             _print_row_3(label, t_rust, t_light, t_cpp)
 
@@ -241,24 +225,22 @@ def bench_logsigbackprop_single() -> None:
             ls_len = sig_rust.logsiglength(d, m)
             deriv = rng.standard_normal(ls_len)
             t_rust = _time(
-                lambda dr=deriv, p=path, s=s_rust: (
-                    sig_rust.logsigbackprop(dr, p, s)
-                )
+                lambda dr=deriv, p=path, s=s_rust: sig_rust.logsigbackprop(dr, p, s)
             )
             t_light = None
             if sig_light is not None:
                 s_light = sig_light.prepare(d, m)
                 t_light = _time(
-                    lambda dr=deriv, p=path, s=s_light: (
-                        sig_light.logsigbackprop(dr, p, s)
+                    lambda dr=deriv, p=path, s=s_light: sig_light.logsigbackprop(
+                        dr, p, s
                     )
                 )
             t_cpp = None
             if iisignature is not None:
                 s_cpp = iisignature.prepare(d, m)
                 t_cpp = _time(
-                    lambda dr=deriv, p=path, s=s_cpp: (
-                        iisignature.logsigbackprop(dr, p, s)
+                    lambda dr=deriv, p=path, s=s_cpp: iisignature.logsigbackprop(
+                        dr, p, s
                     )
                 )
             _print_row_3(label, t_rust, t_light, t_cpp)
@@ -277,23 +259,17 @@ def bench_transforms_single() -> None:
         s = sig_rust.sig(path, m)
         scales = rng.standard_normal(d) + 2
         t_rust = _time(
-            lambda s_=s, sc=scales, d_=d, m_=m: sig_rust.sigscale(
-                s_, sc, d_, m_
-            )
+            lambda s_=s, sc=scales, d_=d, m_=m: sig_rust.sigscale(s_, sc, d_, m_)
         )
         t_light = None
         if sig_light is not None:
             t_light = _time(
-                lambda s_=s, sc=scales, d_=d, m_=m: sig_light.sigscale(
-                    s_, sc, d_, m_
-                )
+                lambda s_=s, sc=scales, d_=d, m_=m: sig_light.sigscale(s_, sc, d_, m_)
             )
         t_cpp = None
         if iisignature is not None:
             t_cpp = _time(
-                lambda s_=s, sc=scales, m_=m: iisignature.sigscale(
-                    s_, sc, m_
-                )
+                lambda s_=s, sc=scales, m_=m: iisignature.sigscale(s_, sc, m_)
             )
         _print_row_3(label, t_rust, t_light, t_cpp)
 
@@ -304,24 +280,16 @@ def bench_transforms_single() -> None:
         s = sig_rust.sig(path[: n // 2], m)
         seg = path[n // 2] - path[n // 2 - 1]
         t_rust = _time(
-            lambda s_=s, sg=seg, d_=d, m_=m: sig_rust.sigjoin(
-                s_, sg, d_, m_
-            )
+            lambda s_=s, sg=seg, d_=d, m_=m: sig_rust.sigjoin(s_, sg, d_, m_)
         )
         t_light = None
         if sig_light is not None:
             t_light = _time(
-                lambda s_=s, sg=seg, d_=d, m_=m: sig_light.sigjoin(
-                    s_, sg, d_, m_
-                )
+                lambda s_=s, sg=seg, d_=d, m_=m: sig_light.sigjoin(s_, sg, d_, m_)
             )
         t_cpp = None
         if iisignature is not None:
-            t_cpp = _time(
-                lambda s_=s, sg=seg, m_=m: iisignature.sigjoin(
-                    s_, sg, m_
-                )
-            )
+            t_cpp = _time(lambda s_=s, sg=seg, m_=m: iisignature.sigjoin(s_, sg, m_))
         _print_row_3(label, t_rust, t_light, t_cpp)
 
 
@@ -332,20 +300,14 @@ def bench_sig_batched() -> None:
     _print_header_3()
     for label, batch, d, m, n in BATCH_CONFIGS:
         paths = rng.standard_normal((batch, n, d))
-        t_rust = _time(
-            lambda p=paths, m_=m: sig_rust.sig(p, m_), repeats=10
-        )
+        t_rust = _time(lambda p=paths, m_=m: sig_rust.sig(p, m_), repeats=10)
         t_light = None
         if sig_light is not None:
-            t_light = _time(
-                lambda p=paths, m_=m: sig_light.sig(p, m_), repeats=10
-            )
+            t_light = _time(lambda p=paths, m_=m: sig_light.sig(p, m_), repeats=10)
         t_cpp = None
         if iisignature is not None:
             t_cpp = _time(
-                lambda p=paths, m_=m: _loop_batch(
-                    iisignature.sig, p, m_
-                ),
+                lambda p=paths, m_=m: _loop_batch(iisignature.sig, p, m_),
                 repeats=10,
             )
         _print_row_3(label, t_rust, t_light, t_cpp)
@@ -376,9 +338,7 @@ def bench_logsig_batched() -> None:
         if iisignature is not None:
             s_cpp = iisignature.prepare(d, m)
             t_cpp = _time(
-                lambda p=paths, s=s_cpp: _loop_batch(
-                    iisignature.logsig, p, s
-                ),
+                lambda p=paths, s=s_cpp: _loop_batch(iisignature.logsig, p, s),
                 repeats=10,
             )
         _print_row_3(label, t_rust, t_light, t_cpp)
@@ -396,17 +356,13 @@ def bench_sigbackprop_batched() -> None:
         sl = sig_rust.siglength(d, m)
         derivs = rng.standard_normal((batch, sl))
         t_rust = _time(
-            lambda dr=derivs, p=paths, m_=m: sig_rust.sigbackprop(
-                dr, p, m_
-            ),
+            lambda dr=derivs, p=paths, m_=m: sig_rust.sigbackprop(dr, p, m_),
             repeats=10,
         )
         t_light = None
         if sig_light is not None:
             t_light = _time(
-                lambda dr=derivs, p=paths, m_=m: sig_light.sigbackprop(
-                    dr, p, m_
-                ),
+                lambda dr=derivs, p=paths, m_=m: sig_light.sigbackprop(dr, p, m_),
                 repeats=10,
             )
         t_cpp = None
@@ -437,17 +393,15 @@ def bench_logsigbackprop_batched() -> None:
         ls_len = sig_rust.logsiglength(d, m)
         derivs = rng.standard_normal((batch, ls_len))
         t_rust = _time(
-            lambda dr=derivs, p=paths, s=s_rust: (
-                sig_rust.logsigbackprop(dr, p, s)
-            ),
+            lambda dr=derivs, p=paths, s=s_rust: sig_rust.logsigbackprop(dr, p, s),
             repeats=10,
         )
         t_light = None
         if sig_light is not None:
             s_light = sig_light.prepare(d, m)
             t_light = _time(
-                lambda dr=derivs, p=paths, s=s_light: (
-                    sig_light.logsigbackprop(dr, p, s)
+                lambda dr=derivs, p=paths, s=s_light: sig_light.logsigbackprop(
+                    dr, p, s
                 ),
                 repeats=10,
             )
