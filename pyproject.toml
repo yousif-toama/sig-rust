@@ -20,6 +20,7 @@ dev = [
     "maturin",
     "numpy>=2.0",
     "pytest",
+    "pytest-cov",
     "ruff",
     "sig-light>=0.2.5",
     "ty",

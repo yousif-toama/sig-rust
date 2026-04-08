@@ -28,10 +28,11 @@ where
 {
     // Threshold calibrated from benchmarks: rayon overhead is ~500-900us.
     // Work units: siglength * n_segments per item (sig ~0.002us per unit).
-    // 250_000 units ≈ 500us of compute, the break-even point.
-    const PARALLEL_THRESHOLD: usize = 250_000;
+    // 500_000 units with min 16 items avoids the boundary regression at B=50.
+    const PARALLEL_THRESHOLD: usize = 500_000;
+    const MIN_BATCH_FOR_PARALLEL: usize = 16;
 
-    if batch_size > 1 && total_work > PARALLEL_THRESHOLD {
+    if batch_size >= MIN_BATCH_FOR_PARALLEL && total_work > PARALLEL_THRESHOLD {
         (0..batch_size).into_par_iter().map(&f).collect()
     } else {
         (0..batch_size).map(f).collect()

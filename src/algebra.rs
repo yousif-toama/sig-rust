@@ -27,6 +27,51 @@ pub fn tensor_multiply(a: &LevelList, b: &LevelList) -> LevelList {
     result
 }
 
+/// Fused unconcatenation: given `result = prev ⊗ seg`, recover `prev`.
+///
+/// Solves `prev[k] = result[k] - seg[k] - Σ outer(prev[i], seg[j])` iterating
+/// low to high (each level depends only on lower levels of `prev`).
+/// Avoids the clone + negate + multiply pattern of the naive approach.
+pub fn tensor_unconcatenate_into(result: &LevelList, seg: &LevelList, prev: &mut LevelList) {
+    let m = result.depth();
+    prev.set_sub(result, seg);
+
+    for level_k in 1..m {
+        for i in 0..level_k {
+            let j = level_k - 1 - i;
+            let seg_j = seg.level(j);
+            let (prev_i, dest) = prev.levels_split(i, level_k);
+            outer_subtract(prev_i, seg_j, dest);
+        }
+    }
+}
+
+/// In-place adjoint of `tensor_multiply`: writes gradients into pre-allocated buffers.
+///
+/// Equivalent to `tensor_multiply_adjoint` but avoids allocating `da` and `db`.
+pub fn tensor_multiply_adjoint_into(
+    dresult: &LevelList,
+    a: &LevelList,
+    b: &LevelList,
+    da: &mut LevelList,
+    db: &mut LevelList,
+) {
+    let m = a.depth();
+    da.copy_from(dresult);
+    db.copy_from(dresult);
+
+    for level_k in 1..m {
+        for i in 0..level_k {
+            let j = level_k - 1 - i;
+            let si = a.level_len(i);
+            let sj = b.level_len(j);
+            let dr = dresult.level(level_k);
+            matvec_add_slice(dr, si, sj, b.level(j), da.level_mut(i));
+            vecmat_add_slice(a.level(i), dr, si, sj, db.level_mut(j));
+        }
+    }
+}
+
 /// In-place concatenation product: writes `(1 + a) * (1 + b)` into `result`.
 ///
 /// Avoids all allocations when `result` is pre-sized.
@@ -486,6 +531,15 @@ fn outer_into_views(a: &[f64], b: &[f64], out: &mut [f64]) {
     for (&av, chunk) in a.iter().zip(out.chunks_exact_mut(b.len())) {
         for (o, &bv) in chunk.iter_mut().zip(b.iter()) {
             *o = av * bv;
+        }
+    }
+}
+
+/// Compute outer product and SUBTRACT from result: `result -= outer(a, b)`.
+fn outer_subtract(a: &[f64], b: &[f64], result: &mut [f64]) {
+    for (&av, chunk) in a.iter().zip(result.chunks_exact_mut(b.len())) {
+        for (r, &bv) in chunk.iter_mut().zip(b.iter()) {
+            *r -= av * bv;
         }
     }
 }

@@ -195,6 +195,26 @@ impl LevelList {
         }
     }
 
+    /// Set self = a - b (element-wise).
+    pub fn set_sub(&mut self, a: &LevelList, b: &LevelList) {
+        for ((dst, &av), &bv) in self.data.iter_mut().zip(a.data.iter()).zip(b.data.iter()) {
+            *dst = av - bv;
+        }
+    }
+
+    /// Get non-overlapping references to two levels: immutable `lo`, mutable `hi`.
+    ///
+    /// Panics if `lo >= hi` or if indices are out of bounds.
+    pub fn levels_split(&mut self, lo: usize, hi: usize) -> (&[f64], &mut [f64]) {
+        debug_assert!(lo < hi);
+        let hi_start = self.offsets[hi];
+        let hi_end = self.offsets[hi + 1];
+        let lo_start = self.offsets[lo];
+        let lo_end = self.offsets[lo + 1];
+        let (left, right) = self.data.split_at_mut(hi_start);
+        (&left[lo_start..lo_end], &mut right[..hi_end - hi_start])
+    }
+
     /// Set all data to zero.
     pub fn fill_zero(&mut self) {
         self.data.fill(0.0);

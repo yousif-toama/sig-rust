@@ -2,7 +2,7 @@ use ndarray::{Array1, Array2};
 
 use crate::algebra::{
     sig_of_segment_adjoint, sig_of_segment_from_slice, split_signature, tensor_log_adjoint,
-    tensor_multiply_adjoint, tensor_multiply_into,
+    tensor_multiply_adjoint_into, tensor_multiply_into, tensor_unconcatenate_into,
 };
 use crate::logsignature::PreparedData;
 use crate::signature::{sig_levels, siglength};
@@ -61,20 +61,20 @@ fn sigbackprop_core(
     let n = num_segs + 1;
     let mut dpath = Array2::zeros((n, d));
     let mut prev_sig = LevelList::zeros(dim, depth);
-    let mut inv_seg = LevelList::zeros(dim, depth);
+    let mut da_buf = LevelList::zeros(dim, depth);
+    let mut db_buf = LevelList::zeros(dim, depth);
 
     for i in (1..num_segs).rev() {
-        // Recover prev_sig = sig_{i-1} via: sig_i * S(-h_i)
-        inv_seg.copy_from(&seg_sigs[i]);
-        inv_seg.negate_even_indexed_levels();
-        tensor_multiply_into(&current_sig, &inv_seg, &mut prev_sig);
+        // Recover prev_sig = sig_{i-1} via unconcatenation:
+        // current_sig = prev_sig ⊗ seg_sigs[i], solve for prev_sig
+        tensor_unconcatenate_into(&current_sig, &seg_sigs[i], &mut prev_sig);
 
         // Compute adjoint of tensor_multiply(sig_{i-1}, seg_sigs[i])
-        let (da, db) = tensor_multiply_adjoint(&dacc, &prev_sig, &seg_sigs[i]);
-        dacc = da;
+        tensor_multiply_adjoint_into(&dacc, &prev_sig, &seg_sigs[i], &mut da_buf, &mut db_buf);
+        std::mem::swap(&mut dacc, &mut da_buf);
 
         // Compute displacement gradient for this segment
-        let dh_i = sig_of_segment_adjoint(&db, &displacements.row(i).to_owned(), depth);
+        let dh_i = sig_of_segment_adjoint(&db_buf, &displacements.row(i).to_owned(), depth);
         for j in 0..d {
             dpath[[i, j]] -= dh_i[j];
             dpath[[i + 1, j]] += dh_i[j];
@@ -176,17 +176,16 @@ fn logsigbackprop_s_method(
     let mut dacc = dsig_levels;
     let mut dpath = Array2::zeros((n, d));
     let mut prev_sig = LevelList::zeros(dim, depth);
-    let mut inv_seg = LevelList::zeros(dim, depth);
+    let mut da_buf = LevelList::zeros(dim, depth);
+    let mut db_buf = LevelList::zeros(dim, depth);
 
     for i in (1..num_segs).rev() {
-        inv_seg.copy_from(&seg_sigs[i]);
-        inv_seg.negate_even_indexed_levels();
-        tensor_multiply_into(&current_sig, &inv_seg, &mut prev_sig);
+        tensor_unconcatenate_into(&current_sig, &seg_sigs[i], &mut prev_sig);
 
-        let (da, db) = tensor_multiply_adjoint(&dacc, &prev_sig, &seg_sigs[i]);
-        dacc = da;
+        tensor_multiply_adjoint_into(&dacc, &prev_sig, &seg_sigs[i], &mut da_buf, &mut db_buf);
+        std::mem::swap(&mut dacc, &mut da_buf);
 
-        let dh_i = sig_of_segment_adjoint(&db, &displacements.row(i).to_owned(), depth);
+        let dh_i = sig_of_segment_adjoint(&db_buf, &displacements.row(i).to_owned(), depth);
         for j in 0..d {
             dpath[[i, j]] -= dh_i[j];
             dpath[[i + 1, j]] += dh_i[j];
