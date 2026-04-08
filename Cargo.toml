@@ -46,3 +46,7 @@ cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
 cast_precision_loss = "allow"
 cast_possible_wrap = "allow"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

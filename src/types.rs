@@ -1,4 +1,4 @@
-use ndarray::{Array1, Array2};
+use ndarray::Array2;
 
 use crate::error::SigError;
 
@@ -41,26 +41,65 @@ impl Depth {
     }
 }
 
-/// Truncated tensor algebra element as a list of per-level flat vectors.
+/// Truncated tensor algebra element stored as a single flat allocation.
 ///
-/// `levels[k]` has length `d^(k+1)` for k in `0..m`.
-/// The implicit scalar at level 0 depends on context (1 for unit, 0 for nil).
+/// Level k (0-indexed) has `d^(k+1)` elements. All levels are concatenated
+/// contiguously in `data`, with `offsets` marking boundaries.
 #[derive(Debug, Clone)]
 pub struct LevelList {
-    pub levels: Vec<Array1<f64>>,
+    data: Vec<f64>,
+    offsets: Vec<usize>,
     dim: Dim,
 }
 
 impl LevelList {
-    pub fn new(levels: Vec<Array1<f64>>, dim: Dim) -> Self {
-        Self { levels, dim }
+    /// Build from pre-allocated per-level slices.
+    pub fn from_levels(levels: &[&[f64]], dim: Dim) -> Self {
+        let m = levels.len();
+        let total: usize = levels.iter().map(|l| l.len()).sum();
+        let mut data = Vec::with_capacity(total);
+        let mut offsets = Vec::with_capacity(m + 1);
+        offsets.push(0);
+        for &level in levels {
+            data.extend_from_slice(level);
+            offsets.push(data.len());
+        }
+        Self { data, offsets, dim }
+    }
+
+    /// Build from owned Vec per level.
+    pub fn from_level_vecs(levels: &[Vec<f64>], dim: Dim) -> Self {
+        let m = levels.len();
+        let total: usize = levels.iter().map(Vec::len).sum();
+        let mut data = Vec::with_capacity(total);
+        let mut offsets = Vec::with_capacity(m + 1);
+        offsets.push(0);
+        for level in levels {
+            data.extend_from_slice(level);
+            offsets.push(data.len());
+        }
+        Self { data, offsets, dim }
+    }
+
+    /// Build from a single flat data vec + precomputed offsets.
+    pub fn from_flat_with_offsets(data: Vec<f64>, offsets: Vec<usize>, dim: Dim) -> Self {
+        Self { data, offsets, dim }
     }
 
     pub fn zeros(dim: Dim, depth: Depth) -> Self {
-        let levels = (1..=depth.value())
-            .map(|k| Array1::zeros(dim.pow(k)))
-            .collect();
-        Self { levels, dim }
+        let m = depth.value();
+        let mut offsets = Vec::with_capacity(m + 1);
+        offsets.push(0);
+        let mut total = 0;
+        for k in 1..=m {
+            total += dim.pow(k);
+            offsets.push(total);
+        }
+        Self {
+            data: vec![0.0; total],
+            offsets,
+            dim,
+        }
     }
 
     pub fn dim(&self) -> Dim {
@@ -68,33 +107,97 @@ impl LevelList {
     }
 
     pub fn depth(&self) -> usize {
-        self.levels.len()
+        self.offsets.len() - 1
+    }
+
+    /// Access level k (0-indexed) as a slice.
+    pub fn level(&self, k: usize) -> &[f64] {
+        &self.data[self.offsets[k]..self.offsets[k + 1]]
+    }
+
+    /// Mutable access to level k (0-indexed).
+    pub fn level_mut(&mut self, k: usize) -> &mut [f64] {
+        let start = self.offsets[k];
+        let end = self.offsets[k + 1];
+        &mut self.data[start..end]
+    }
+
+    /// Length of level k.
+    pub fn level_len(&self, k: usize) -> usize {
+        self.offsets[k + 1] - self.offsets[k]
+    }
+
+    /// The entire flat data.
+    pub fn data(&self) -> &[f64] {
+        &self.data
+    }
+
+    /// Mutable access to entire flat data.
+    pub fn data_mut(&mut self) -> &mut [f64] {
+        &mut self.data
+    }
+
+    /// The offsets array (for constructing from parts).
+    pub fn offsets(&self) -> &[usize] {
+        &self.offsets
     }
 
     /// Split a flat signature array into a `LevelList`.
-    pub fn from_flat(flat: &Array1<f64>, dim: Dim, depth: Depth) -> Self {
-        let mut levels = Vec::with_capacity(depth.value());
+    pub fn from_flat(flat: &[f64], dim: Dim, depth: Depth) -> Self {
+        let m = depth.value();
+        let mut offsets = Vec::with_capacity(m + 1);
+        offsets.push(0);
         let mut offset = 0;
-        for k in 1..=depth.value() {
-            let size = dim.pow(k);
-            levels.push(flat.slice(ndarray::s![offset..offset + size]).to_owned());
-            offset += size;
+        for k in 1..=m {
+            offset += dim.pow(k);
+            offsets.push(offset);
         }
-        Self { levels, dim }
+        Self {
+            data: flat[..offset].to_vec(),
+            offsets,
+            dim,
+        }
     }
 
-    /// Concatenate all levels into a flat signature array.
-    pub fn to_flat(&self) -> Array1<f64> {
-        let total_len: usize = self.levels.iter().map(Array1::len).sum();
-        let mut flat = Array1::zeros(total_len);
-        let mut offset = 0;
-        for level in &self.levels {
-            let len = level.len();
-            flat.slice_mut(ndarray::s![offset..offset + len])
-                .assign(level);
-            offset += len;
+    /// Return the flat data as a Vec (near-zero cost clone).
+    pub fn to_flat(&self) -> Vec<f64> {
+        self.data.clone()
+    }
+
+    /// Consume self and return the flat data (zero-cost).
+    pub fn into_flat(self) -> Vec<f64> {
+        self.data
+    }
+
+    /// Add another `LevelList` in-place: `self += other`.
+    pub fn add_assign(&mut self, other: &LevelList) {
+        for (a, &b) in self.data.iter_mut().zip(other.data.iter()) {
+            *a += b;
         }
-        flat
+    }
+
+    /// Scaled add: self += scale * other.
+    pub fn scaled_add(&mut self, scale: f64, other: &LevelList) {
+        for (a, &b) in self.data.iter_mut().zip(other.data.iter()) {
+            *a += scale * b;
+        }
+    }
+
+    /// Copy data from another `LevelList` into self.
+    pub fn copy_from(&mut self, other: &LevelList) {
+        self.data.copy_from_slice(&other.data);
+    }
+
+    /// Set self = a + b (element-wise).
+    pub fn set_sum(&mut self, a: &LevelList, b: &LevelList) {
+        for ((dst, &av), &bv) in self.data.iter_mut().zip(a.data.iter()).zip(b.data.iter()) {
+            *dst = av + bv;
+        }
+    }
+
+    /// Set all data to zero.
+    pub fn fill_zero(&mut self) {
+        self.data.fill(0.0);
     }
 }
 
@@ -129,12 +232,17 @@ impl BatchedLevelList {
 
     /// Extract a single element from the batch as a `LevelList`.
     pub fn get(&self, i: usize) -> LevelList {
-        let levels = self
-            .levels
-            .iter()
-            .map(|lev| lev.row(i).to_owned())
-            .collect();
-        LevelList::new(levels, self.dim)
+        let m = self.levels.len();
+        let mut offsets = Vec::with_capacity(m + 1);
+        offsets.push(0);
+        let total: usize = self.levels.iter().map(Array2::ncols).sum();
+        let mut data = Vec::with_capacity(total);
+        for lev in &self.levels {
+            let row = lev.row(i);
+            data.extend_from_slice(row.as_slice().expect("contiguous"));
+            offsets.push(data.len());
+        }
+        LevelList::from_flat_with_offsets(data, offsets, self.dim)
     }
 
     /// Split batched levels into left (even indices) and right (odd indices).
@@ -144,7 +252,6 @@ impl BatchedLevelList {
         let mut right_levels = Vec::with_capacity(self.levels.len());
 
         for lev in &self.levels {
-            let rows = lev.nrows();
             let cols = lev.ncols();
             let mut left = Array2::zeros((half, cols));
             let mut right = Array2::zeros((half, cols));
@@ -152,9 +259,6 @@ impl BatchedLevelList {
                 left.row_mut(i).assign(&lev.row(2 * i));
                 right.row_mut(i).assign(&lev.row(2 * i + 1));
             }
-            // If odd number of rows, the last element is the remainder
-            // (handled by the caller)
-            let _ = rows; // suppress unused warning
             left_levels.push(left);
             right_levels.push(right);
         }

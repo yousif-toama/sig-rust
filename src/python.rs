@@ -143,12 +143,14 @@ fn py_sig<'py>(
             Ok(dyn_arr.into_pyarray(py).into_any().unbind())
         }
         SigResult::Levels(levels) => {
+            let m = levels.depth();
             let py_list = PyList::new(
                 py,
-                levels
-                    .levels
-                    .into_iter()
-                    .map(|l| l.into_dyn().into_pyarray(py).into_any().unbind()),
+                (0..m).map(|k| {
+                    let level_data = levels.level(k).to_vec();
+                    let arr = Array1::from_vec(level_data).into_dyn();
+                    arr.into_pyarray(py).into_any().unbind()
+                }),
             )?;
             Ok(py_list.into_any().unbind())
         }
@@ -229,11 +231,25 @@ fn py_sigcombine<'py>(
 }
 
 #[pyfunction(name = "prepare")]
-fn py_prepare(d: usize, m: usize) -> PyResult<PyPreparedData> {
+#[pyo3(signature = (d, m, method="auto"))]
+fn py_prepare(d: usize, m: usize, method: &str) -> PyResult<PyPreparedData> {
     let dim = Dim::new(d).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let depth =
         Depth::new(m).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    let inner = logsignature::prepare(dim, depth);
+    let use_bch = match method {
+        "auto" => None,
+        "bch" | "C" | "c" => Some(true),
+        "s" | "S" => Some(false),
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unknown method '{method}'. Use 'auto', 'bch'/'C', or 's'/'S'."
+            )));
+        }
+    };
+    let inner = match use_bch {
+        Some(bch) => logsignature::prepare_with_method(dim, depth, bch),
+        None => logsignature::prepare(dim, depth),
+    };
     Ok(PyPreparedData {
         inner: Arc::new(inner),
     })
