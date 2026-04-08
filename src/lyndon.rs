@@ -392,6 +392,18 @@ mod tests {
         assert_eq!(matrices[2].dim(), (2, 8));
     }
 
+    #[test]
+    fn test_build_projection_matrices_dim1() {
+        // dim=1: only length-1 words exist, higher levels produce empty matrices
+        let words = generate_lyndon_words(1, 3);
+        assert_eq!(words, vec![vec![0]]);
+        let matrices = build_projection_matrices(1, 3, &words);
+        assert_eq!(matrices.len(), 3);
+        assert_eq!(matrices[0].dim(), (1, 1)); // 1 word at level 1
+        assert_eq!(matrices[1].dim(), (0, 1)); // no words at level 2
+        assert_eq!(matrices[2].dim(), (0, 1)); // no words at level 3
+    }
+
     // --- jacobi_svd ---
 
     #[test]

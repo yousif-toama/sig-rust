@@ -531,4 +531,45 @@ mod tests {
             assert_relative_eq!(a, b, epsilon = 1e-10);
         }
     }
+
+    #[test]
+    fn test_logsig_s_method_single_point() {
+        // Force S method, single point → exercises logsig_s_method n<2 branch
+        let path = Array2::from_shape_vec((1, 2), vec![1.0, 2.0]).expect("valid");
+        let s = prepare_with_method(dim(2), depth_val(2), false);
+        let ls = logsig(&path, &s);
+        assert!(ls.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_logsig_expanded_single_point() {
+        let path = Array2::from_shape_vec((1, 2), vec![1.0, 2.0]).expect("valid");
+        let s = prepare(dim(2), depth_val(2));
+        let expanded = logsig_expanded(&path, &s);
+        assert!(expanded.iter().all(|&x| x == 0.0));
+        assert_eq!(
+            expanded.len(),
+            crate::signature::siglength(dim(2), depth_val(2))
+        );
+    }
+
+    #[test]
+    fn test_prepare_dim1_depth3_empty_levels() {
+        // dim=1 has no Lyndon words at length 2+, exercising empty projection paths
+        let s = prepare_with_method(dim(1), depth_val(3), false);
+        assert_eq!(logsiglength(dim(1), depth_val(3)), 1);
+        // Only one word: [0]
+        assert_eq!(s.lyndon_words.len(), 1);
+        assert_eq!(s.lyndon_words[0], vec![0]);
+    }
+
+    #[test]
+    fn test_logsig_dim1() {
+        // dim=1 exercises empty sparse projection levels
+        let path = Array2::from_shape_vec((3, 1), vec![0.0, 1.0, 3.0]).expect("valid");
+        let s = prepare_with_method(dim(1), depth_val(3), false);
+        let ls = logsig(&path, &s);
+        assert_eq!(ls.len(), 1);
+        assert_relative_eq!(ls[0], 3.0, epsilon = 1e-10);
+    }
 }

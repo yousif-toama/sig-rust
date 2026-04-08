@@ -448,6 +448,7 @@ mod tests {
         let ll = LevelList::from_flat_with_offsets(data, offsets, dim(2));
         assert_eq!(ll.level(0), &[1.0, 2.0]);
         assert_eq!(ll.level(1), &[3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(ll.offsets(), &[0, 2, 6]);
     }
 
     #[test]

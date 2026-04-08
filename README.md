@@ -181,25 +181,21 @@ sig-rust uses the standard approach for computing signatures of piecewise-linear
 
 ## Development
 
+Requires [just](https://github.com/casey/just) for task running.
+
 ```bash
 git clone https://github.com/yousif-toama/sig-rust.git
 cd sig-rust
-uv sync --all-extras --group dev --group test
+just sync              # Install all dependencies
 
-# Rust
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
-cargo fmt --check
+just check             # Run all checks (Rust + Python)
+just rust-check        # Rust only: fmt, clippy, test
+just python-check      # Python only: ruff, ty, pytest
 
-# Python
-uv run maturin develop --release
-uv run pytest -v
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check
-
-# Benchmarks
-uv run python scripts/benchmark_full.py
+just build             # Build native extension
+just format-all        # Auto-format everything
+just test-cov-all      # Full coverage (Rust + Python)
+just bench             # Quick benchmark vs iisignature
 ```
 
 ## License

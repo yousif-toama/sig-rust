@@ -193,9 +193,9 @@ mod tests {
         let path =
             Array2::from_shape_vec((3, 2), vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]).expect("valid");
         let result = sig(&path, depth(2), SigFormat::Flat);
-        match result {
-            SigResult::Flat(flat) => assert_eq!(flat.len(), 6),
-            _ => unreachable!("expected Flat variant"),
+        assert!(matches!(result, SigResult::Flat(_)));
+        if let SigResult::Flat(flat) = result {
+            assert_eq!(flat.len(), 6);
         }
     }
 
@@ -204,13 +204,11 @@ mod tests {
         let path =
             Array2::from_shape_vec((3, 2), vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]).expect("valid");
         let result = sig(&path, depth(2), SigFormat::Levels);
-        match result {
-            SigResult::Levels(ll) => {
-                assert_eq!(ll.depth(), 2);
-                assert_eq!(ll.level(0).len(), 2);
-                assert_eq!(ll.level(1).len(), 4);
-            }
-            _ => unreachable!("expected Levels variant"),
+        assert!(matches!(result, SigResult::Levels(_)));
+        if let SigResult::Levels(ll) = result {
+            assert_eq!(ll.depth(), 2);
+            assert_eq!(ll.level(0).len(), 2);
+            assert_eq!(ll.level(1).len(), 4);
         }
     }
 
@@ -276,13 +274,44 @@ mod tests {
         let from_levels = concat_levels(&levels);
 
         let result = sig(&path, m, SigFormat::Flat);
-        match result {
-            SigResult::Flat(flat) => {
-                for (a, b) in from_levels.iter().zip(flat.iter()) {
-                    assert_relative_eq!(a, b, epsilon = 1e-14);
-                }
+        assert!(matches!(result, SigResult::Flat(_)));
+        if let SigResult::Flat(flat) = result {
+            for (a, b) in from_levels.iter().zip(flat.iter()) {
+                assert_relative_eq!(a, b, epsilon = 1e-14);
             }
-            _ => unreachable!("expected Flat"),
+        }
+    }
+
+    #[test]
+    fn test_sig_cumulative_format() {
+        let path =
+            Array2::from_shape_vec((3, 2), vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]).expect("valid");
+        let result = sig(&path, depth(2), SigFormat::Cumulative);
+        assert!(matches!(result, SigResult::Cumulative(_)));
+        if let SigResult::Cumulative(cum) = result {
+            assert_eq!(cum.nrows(), 2);
+            assert_eq!(cum.ncols(), 6);
+        }
+    }
+
+    #[test]
+    fn test_sig_cumulative_single_point() {
+        let path = Array2::from_shape_vec((1, 2), vec![1.0, 2.0]).expect("valid");
+        let cum = sig_cumulative(&path, depth(2));
+        assert_eq!(cum.nrows(), 0);
+        assert_eq!(cum.ncols(), 6);
+    }
+
+    #[test]
+    fn test_sig_cumulative_two_points() {
+        let path = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 1.0, 2.0]).expect("valid");
+        let cum = sig_cumulative(&path, depth(2));
+        assert_eq!(cum.nrows(), 1);
+        // Should equal the single-segment signature
+        let levels = sig_levels(&path, depth(2));
+        let flat = concat_levels(&levels);
+        for (a, b) in cum.row(0).iter().zip(flat.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-14);
         }
     }
 }

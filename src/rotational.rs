@@ -302,6 +302,13 @@ mod tests {
     }
 
     #[test]
+    fn test_balanced_indices_zero_half() {
+        // half_level=0: only index 0 (no bits set)
+        let indices = balanced_indices(2, 0);
+        assert_eq!(indices, vec![0]);
+    }
+
+    #[test]
     fn test_balanced_indices_level2() {
         // level=2, half_level=1: positions where exactly 1 of 2 bits is set
         let indices = balanced_indices(2, 1);

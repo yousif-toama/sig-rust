@@ -386,4 +386,42 @@ mod tests {
         assert_eq!(grad.dim(), (1, 2));
         assert!(grad.iter().all(|&x| x == 0.0));
     }
+
+    #[test]
+    fn test_logsigbackprop_s_method_short_path() {
+        // Force S method, exercises logsigbackprop_s_method n<2 branch
+        let path = make_path(&[1.0, 2.0], 1, 2);
+        let d = Dim::new(2).expect("ok");
+        let m = depth_val(2);
+        let s = logsignature::prepare_with_method(d, m, false);
+        let deriv = Array1::ones(logsignature::logsiglength(d, m));
+        let grad = logsigbackprop(&deriv, &path, &s);
+        assert_eq!(grad.dim(), (1, 2));
+        assert!(grad.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_logsigbackprop_s_method_two_points() {
+        // 2-point path (single segment) exercises num_segs==1 skip in S method
+        let path = make_path(&[0.0, 0.0, 1.0, 0.5], 2, 2);
+        let d = Dim::new(2).expect("ok");
+        let m = depth_val(2);
+        let s = logsignature::prepare_with_method(d, m, false);
+        let deriv = Array1::ones(logsignature::logsiglength(d, m));
+        let grad = logsigbackprop(&deriv, &path, &s);
+        assert_eq!(grad.dim(), (2, 2));
+        assert!(grad.iter().any(|&x| x.abs() > 1e-10));
+    }
+
+    #[test]
+    fn test_logsigbackprop_dim1() {
+        // dim=1 exercises unproject_lyndon with empty projection matrices
+        let path = make_path(&[0.0, 1.0, 3.0], 3, 1);
+        let d = Dim::new(1).expect("ok");
+        let m = depth_val(3);
+        let s = logsignature::prepare_with_method(d, m, false);
+        let deriv = Array1::ones(logsignature::logsiglength(d, m));
+        let grad = logsigbackprop(&deriv, &path, &s);
+        assert_eq!(grad.dim(), (3, 1));
+    }
 }

@@ -271,22 +271,18 @@ mod tests {
         let deriv = Array1::ones(sig_flat.len());
 
         let grad = sigjoinbackprop(&deriv, &sig_flat, &segment, d, m, None);
-        match &grad {
-            SigjoinGradient::WithoutFixed { dsig: _, dsegment } => {
-                let eps = 1e-6;
-                for i in 0..segment.len() {
-                    let mut s_plus = segment.clone();
-                    let mut s_minus = segment.clone();
-                    s_plus[i] += eps;
-                    s_minus[i] -= eps;
-                    let f_plus: f64 = sigjoin(&sig_flat, &s_plus, d, m, None).sum();
-                    let f_minus: f64 = sigjoin(&sig_flat, &s_minus, d, m, None).sum();
-                    let numerical = (f_plus - f_minus) / (2.0 * eps);
-                    assert_relative_eq!(dsegment[i], numerical, epsilon = 1e-4);
-                }
-            }
-            SigjoinGradient::WithFixed { .. } => {
-                unreachable!("expected WithoutFixed");
+        assert!(matches!(grad, SigjoinGradient::WithoutFixed { .. }));
+        if let SigjoinGradient::WithoutFixed { dsig: _, dsegment } = grad {
+            let eps = 1e-6;
+            for i in 0..segment.len() {
+                let mut s_plus = segment.clone();
+                let mut s_minus = segment.clone();
+                s_plus[i] += eps;
+                s_minus[i] -= eps;
+                let f_plus: f64 = sigjoin(&sig_flat, &s_plus, d, m, None).sum();
+                let f_minus: f64 = sigjoin(&sig_flat, &s_minus, d, m, None).sum();
+                let numerical = (f_plus - f_minus) / (2.0 * eps);
+                assert_relative_eq!(dsegment[i], numerical, epsilon = 1e-4);
             }
         }
     }

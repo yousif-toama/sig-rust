@@ -1040,5 +1040,9 @@ mod tests {
                 vec![2, 1, 1, 1]
             ]
         );
+        // Edge cases
+        assert_eq!(compositions(0, 0), vec![Vec::<usize>::new()]);
+        assert!(compositions(1, 0).is_empty());
+        assert!(compositions(2, 5).is_empty());
     }
 }
