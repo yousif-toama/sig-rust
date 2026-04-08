@@ -1004,6 +1004,129 @@ class TestRotinv2dCompat:
             np.testing.assert_equal(len(ours), len(theirs))
 
 
+# === PreparedData / RotInv2DPreparedData getters ===
+
+
+class TestPreparedDataGetters:
+    def test_d_getter(self):
+        s = sig_rust.prepare(3, 2)
+        assert s.d == 3
+
+    def test_m_getter(self):
+        s = sig_rust.prepare(3, 4)
+        assert s.m == 4
+
+    def test_rotinv2d_m_getter(self):
+        s = sig_rust.rotinv2dprepare(4)
+        assert s.m == 4
+
+
+# === Prepare method variants ===
+
+
+class TestPrepareMethod:
+    def test_bch_method(self, rng):
+        path = rng.standard_normal((10, 2))
+        s_auto = sig_rust.prepare(2, 3)
+        s_bch = sig_rust.prepare(2, 3, method="bch")
+        ls_auto = sig_rust.logsig(path, s_auto)
+        ls_bch = sig_rust.logsig(path, s_bch)
+        np.testing.assert_allclose(ls_bch, ls_auto, atol=1e-10)
+
+    def test_c_method(self):
+        s = sig_rust.prepare(2, 2, method="C")
+        assert s.d == 2
+
+    def test_lowercase_c_method(self):
+        s = sig_rust.prepare(2, 2, method="c")
+        assert s.d == 2
+
+    def test_s_method(self, rng):
+        path = rng.standard_normal((10, 2))
+        s_auto = sig_rust.prepare(2, 3)
+        s_s = sig_rust.prepare(2, 3, method="s")
+        ls_auto = sig_rust.logsig(path, s_auto)
+        ls_s = sig_rust.logsig(path, s_s)
+        np.testing.assert_allclose(ls_s, ls_auto, atol=1e-10)
+
+    def test_uppercase_s_method(self):
+        s = sig_rust.prepare(2, 2, method="S")
+        assert s.d == 2
+
+    def test_invalid_method_raises(self):
+        with pytest.raises(ValueError, match="Unknown method"):
+            sig_rust.prepare(2, 2, method="invalid")
+
+
+# === Error paths ===
+
+
+class TestErrorPaths:
+    def test_sig_1d_input_raises(self):
+        path = np.array([1.0, 2.0, 3.0])
+        with pytest.raises(ValueError, match="at least 2D"):
+            sig_rust.sig(path, 2)
+
+
+# === Parallel execution path ===
+
+
+class TestParallelExecution:
+    def test_large_batch_triggers_parallel(self, rng):
+        d, m = 50, 2
+        batch = rng.standard_normal((20, 11, d))
+        result = sig_rust.sig(batch, m)
+        assert result.shape == (20, sig_rust.siglength(d, m))
+        individual = sig_rust.sig(batch[0], m)
+        np.testing.assert_allclose(result[0], individual, atol=1e-12)
+
+
+# === Batched sigcombine ===
+
+
+class TestSigcombineBatching:
+    def test_batch_matches_individual(self, rng):
+        d, m = 2, 2
+        paths1 = rng.standard_normal((5, 8, d))
+        paths2 = rng.standard_normal((5, 8, d))
+        sigs1 = sig_rust.sig(paths1, m)
+        sigs2 = sig_rust.sig(paths2, m)
+        result = sig_rust.sigcombine(sigs1, sigs2, d, m)
+        assert result.shape == (5, sig_rust.siglength(d, m))
+        for i in range(5):
+            individual = sig_rust.sigcombine(sigs1[i], sigs2[i], d, m)
+            np.testing.assert_allclose(result[i], individual, atol=1e-12)
+
+
+# === Batched sig format=2 ===
+
+
+class TestSigFormat2Batching:
+    def test_batch_matches_individual(self, rng):
+        d, m = 2, 2
+        batch = rng.standard_normal((3, 6, d))
+        result = sig_rust.sig(batch, m, format=2)
+        assert result.shape == (3, 5, sig_rust.siglength(d, m))
+        for i in range(3):
+            individual = sig_rust.sig(batch[i], m, format=2)
+            np.testing.assert_allclose(result[i], individual, atol=1e-12)
+
+
+# === Batched logsig_expanded ===
+
+
+class TestLogsigExpandedBatching:
+    def test_batch_matches_individual(self, rng):
+        d, m = 2, 2
+        s = sig_rust.prepare(d, m)
+        batch = rng.standard_normal((4, 7, d))
+        result = sig_rust.logsig_expanded(batch, s)
+        assert result.shape == (4, sig_rust.siglength(d, m))
+        for i in range(4):
+            individual = sig_rust.logsig_expanded(batch[i], s)
+            np.testing.assert_allclose(result[i], individual, atol=1e-12)
+
+
 @pytest.mark.skipif(not HAS_IISIG, reason="iisignature not installed")
 class TestBatchingCompat:
     @pytest.fixture
