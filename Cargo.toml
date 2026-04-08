@@ -8,7 +8,7 @@ name = "sig_rust"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-ndarray = "0.16"
+ndarray = "0.17"
 num-complex = "0.4"
 pyo3 = { version = "0.25", features = ["extension-module"] }
 numpy = "0.25"
@@ -17,8 +17,8 @@ thiserror = "2"
 
 [dev-dependencies]
 approx = "0.5"
-rand = "0.9"
-rand_chacha = "0.9"
+rand = "0.10"
+rand_chacha = "0.10"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
