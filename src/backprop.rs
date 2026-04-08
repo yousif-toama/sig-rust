@@ -1,8 +1,8 @@
 use ndarray::{Array1, Array2};
 
 use crate::algebra::{
-    sig_of_segment_adjoint_batch, sig_of_segment_from_slice, split_signature, tensor_log_adjoint,
-    tensor_multiply, tensor_multiply_adjoint,
+    sig_of_segment_adjoint, sig_of_segment_from_slice, split_signature, tensor_log_adjoint,
+    tensor_multiply_adjoint, tensor_multiply_into,
 };
 use crate::logsignature::PreparedData;
 use crate::signature::{sig_levels, siglength};
@@ -25,6 +25,11 @@ pub fn sigbackprop(deriv: &Array1<f64>, path: &Array2<f64>, depth: Depth) -> Arr
 }
 
 /// Core sigbackprop logic operating on displacements.
+///
+/// Uses the reversibility trick: instead of storing all intermediate prefix
+/// signatures, recovers them by multiplying by the inverse segment signature.
+/// For a straight-line segment S(h), the inverse is S(-h), computed by
+/// negating even-indexed levels.
 fn sigbackprop_core(
     deriv: &Array1<f64>,
     displacements: &Array2<f64>,
@@ -33,81 +38,60 @@ fn sigbackprop_core(
 ) -> Array2<f64> {
     let num_segs = displacements.nrows();
     let d = displacements.ncols();
-    let m = depth.value();
 
-    // Compute individual segment signatures (avoids batch alloc + extraction)
+    // Compute all segment signatures (needed for inverse and adjoint)
     let seg_sigs: Vec<_> = (0..num_segs)
         .map(|i| {
             sig_of_segment_from_slice(displacements.row(i).as_slice().expect("contiguous"), depth)
         })
         .collect();
 
-    // Sequential forward fold (store intermediates for backprop)
-    let mut acc: Vec<_> = vec![seg_sigs[0].clone()];
-    for seg in &seg_sigs[1..] {
-        let next = tensor_multiply(acc.last().expect("non-empty"), seg);
-        acc.push(next);
-    }
-
-    // Backward through the fold
-    let dlevels = split_signature(deriv, dim, depth);
-    let dseg = backprop_fold(&dlevels, &acc, &seg_sigs);
-
-    // Stack dseg into batched arrays
-    let mut dseg_batch: Vec<Array2<f64>> = Vec::with_capacity(m);
-    for k in 0..m {
-        let level_len = dseg[0].level_len(k);
-        let mut arr = Array2::zeros((num_segs, level_len));
-        for (row_idx, ds) in dseg.iter().enumerate() {
-            let mut row = arr.row_mut(row_idx);
-            let row_slice = row.as_slice_mut().expect("c");
-            row_slice.copy_from_slice(ds.level(k));
+    // Forward fold: compute ONLY the final prefix signature (double-buffered)
+    let mut current_sig = seg_sigs[0].clone();
+    if num_segs > 1 {
+        let mut temp = LevelList::zeros(dim, depth);
+        for seg in &seg_sigs[1..] {
+            tensor_multiply_into(&current_sig, seg, &mut temp);
+            std::mem::swap(&mut current_sig, &mut temp);
         }
-        dseg_batch.push(arr);
     }
 
-    let dh = sig_of_segment_adjoint_batch(&dseg_batch, displacements, depth);
-
-    // Convert displacement gradients to path gradients
+    // Backward pass using reversibility trick
+    let mut dacc = split_signature(deriv, dim, depth);
     let n = num_segs + 1;
     let mut dpath = Array2::zeros((n, d));
-    for i in 0..num_segs {
+    let mut prev_sig = LevelList::zeros(dim, depth);
+    let mut inv_seg = LevelList::zeros(dim, depth);
+
+    for i in (1..num_segs).rev() {
+        // Recover prev_sig = sig_{i-1} via: sig_i * S(-h_i)
+        inv_seg.copy_from(&seg_sigs[i]);
+        inv_seg.negate_even_indexed_levels();
+        tensor_multiply_into(&current_sig, &inv_seg, &mut prev_sig);
+
+        // Compute adjoint of tensor_multiply(sig_{i-1}, seg_sigs[i])
+        let (da, db) = tensor_multiply_adjoint(&dacc, &prev_sig, &seg_sigs[i]);
+        dacc = da;
+
+        // Compute displacement gradient for this segment
+        let dh_i = sig_of_segment_adjoint(&db, &displacements.row(i).to_owned(), depth);
         for j in 0..d {
-            dpath[[i, j]] -= dh[[i, j]];
-            dpath[[i + 1, j]] += dh[[i, j]];
+            dpath[[i, j]] -= dh_i[j];
+            dpath[[i + 1, j]] += dh_i[j];
         }
+
+        // Shift: current_sig = prev_sig for next iteration
+        std::mem::swap(&mut current_sig, &mut prev_sig);
+    }
+
+    // First segment: dseg[0] = dacc
+    let dh_0 = sig_of_segment_adjoint(&dacc, &displacements.row(0).to_owned(), depth);
+    for j in 0..d {
+        dpath[[0, j]] -= dh_0[j];
+        dpath[[1, j]] += dh_0[j];
     }
 
     dpath
-}
-
-/// Backpropagate through the left fold of tensor multiplications.
-fn backprop_fold(
-    dacc_final: &LevelList,
-    acc: &[LevelList],
-    seg_sigs: &[LevelList],
-) -> Vec<LevelList> {
-    let num_segs = seg_sigs.len();
-    let m = seg_sigs[0].depth();
-    let dim = seg_sigs[0].dim();
-    let depth = Depth::new(m).expect("m > 0");
-
-    let mut dseg: Vec<LevelList> = (0..num_segs)
-        .map(|_| LevelList::zeros(dim, depth))
-        .collect();
-
-    let mut dacc_i = dacc_final.clone();
-
-    for i in (1..num_segs).rev() {
-        let (da, db) = tensor_multiply_adjoint(&dacc_i, &acc[i - 1], &seg_sigs[i]);
-        dacc_i = da;
-        dseg[i].add_assign(&db);
-    }
-
-    // dseg[0] = dacc[0] since acc[0] = seg[0]
-    dseg[0].add_assign(&dacc_i);
-
-    dseg
 }
 
 /// Compute the full Jacobian of the signature w.r.t. the path.
@@ -145,6 +129,8 @@ pub fn logsigbackprop(deriv: &Array1<f64>, path: &Array2<f64>, s: &PreparedData)
 }
 
 /// Gradient through the log signature using the S method.
+///
+/// Uses the same reversibility trick as `sigbackprop_core`.
 fn logsigbackprop_s_method(
     deriv: &Array1<f64>,
     path: &Array2<f64>,
@@ -152,7 +138,6 @@ fn logsigbackprop_s_method(
 ) -> Array2<f64> {
     let n = path.nrows();
     let d = path.ncols();
-    let m = s.depth.value();
 
     if n < 2 {
         return Array2::zeros((n, d));
@@ -165,50 +150,55 @@ fn logsigbackprop_s_method(
     let sig_levs = sig_levels(path, s.depth);
     let dsig_levels = tensor_log_adjoint(&dlog_levels, &sig_levs);
 
-    // Step 3: Backprop through sig computation
+    // Step 3: Backprop through sig computation using reversibility
     let displacements = &path.slice(ndarray::s![1.., ..]) - &path.slice(ndarray::s![..n - 1, ..]);
     let num_segs = n - 1;
+    let dim = s.dim;
+    let depth = s.depth;
 
-    // Compute individual segment signatures
     let seg_sigs: Vec<_> = (0..num_segs)
         .map(|i| {
-            sig_of_segment_from_slice(
-                displacements.row(i).as_slice().expect("contiguous"),
-                s.depth,
-            )
+            sig_of_segment_from_slice(displacements.row(i).as_slice().expect("contiguous"), depth)
         })
         .collect();
 
-    let mut acc: Vec<_> = vec![seg_sigs[0].clone()];
-    for seg in &seg_sigs[1..] {
-        let next = tensor_multiply(acc.last().expect("non-empty"), seg);
-        acc.push(next);
-    }
-
-    let dseg = backprop_fold(&dsig_levels, &acc, &seg_sigs);
-
-    // Batched adjoint
-    let mut dseg_batch: Vec<Array2<f64>> = Vec::with_capacity(m);
-    for k in 0..m {
-        let level_len = dseg[0].level_len(k);
-        let mut arr = Array2::zeros((num_segs, level_len));
-        for (row_idx, ds) in dseg.iter().enumerate() {
-            let mut row = arr.row_mut(row_idx);
-            let row_slice = row.as_slice_mut().expect("c");
-            row_slice.copy_from_slice(ds.level(k));
+    // Forward fold: compute only the final prefix signature
+    let mut current_sig = seg_sigs[0].clone();
+    if num_segs > 1 {
+        let mut temp = LevelList::zeros(dim, depth);
+        for seg in &seg_sigs[1..] {
+            tensor_multiply_into(&current_sig, seg, &mut temp);
+            std::mem::swap(&mut current_sig, &mut temp);
         }
-        dseg_batch.push(arr);
     }
 
-    let dh = sig_of_segment_adjoint_batch(&dseg_batch, &displacements, s.depth);
-
-    // Path gradient
+    // Backward pass using reversibility
+    let mut dacc = dsig_levels;
     let mut dpath = Array2::zeros((n, d));
-    for i in 0..num_segs {
+    let mut prev_sig = LevelList::zeros(dim, depth);
+    let mut inv_seg = LevelList::zeros(dim, depth);
+
+    for i in (1..num_segs).rev() {
+        inv_seg.copy_from(&seg_sigs[i]);
+        inv_seg.negate_even_indexed_levels();
+        tensor_multiply_into(&current_sig, &inv_seg, &mut prev_sig);
+
+        let (da, db) = tensor_multiply_adjoint(&dacc, &prev_sig, &seg_sigs[i]);
+        dacc = da;
+
+        let dh_i = sig_of_segment_adjoint(&db, &displacements.row(i).to_owned(), depth);
         for j in 0..d {
-            dpath[[i, j]] -= dh[[i, j]];
-            dpath[[i + 1, j]] += dh[[i, j]];
+            dpath[[i, j]] -= dh_i[j];
+            dpath[[i + 1, j]] += dh_i[j];
         }
+
+        std::mem::swap(&mut current_sig, &mut prev_sig);
+    }
+
+    let dh_0 = sig_of_segment_adjoint(&dacc, &displacements.row(0).to_owned(), depth);
+    for j in 0..d {
+        dpath[[0, j]] -= dh_0[j];
+        dpath[[1, j]] += dh_0[j];
     }
 
     dpath

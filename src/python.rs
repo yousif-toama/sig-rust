@@ -14,6 +14,35 @@ use crate::transforms::{self, SigjoinGradient};
 use crate::types::{Depth, Dim};
 
 // ---------------------------------------------------------------------------
+// Parallelism heuristic
+// ---------------------------------------------------------------------------
+
+/// Collect results in parallel or sequentially based on estimated work.
+///
+/// Uses rayon when total work exceeds the threshold, falls back to sequential
+/// iteration for small batches where thread pool overhead dominates.
+fn collect_par_or_seq<T, F>(batch_size: usize, total_work: usize, f: F) -> Vec<T>
+where
+    T: Send,
+    F: Fn(usize) -> T + Sync,
+{
+    // Threshold calibrated from benchmarks: rayon overhead is ~500-900us.
+    // Work units: siglength * n_segments per item (sig ~0.002us per unit).
+    // 250_000 units ≈ 500us of compute, the break-even point.
+    const PARALLEL_THRESHOLD: usize = 250_000;
+
+    if batch_size > 1 && total_work > PARALLEL_THRESHOLD {
+        (0..batch_size).into_par_iter().map(&f).collect()
+    } else {
+        (0..batch_size).map(f).collect()
+    }
+}
+
+fn siglength_fast(d: usize, m: usize) -> usize {
+    (1..=m).map(|k| d.pow(k as u32)).sum()
+}
+
+// ---------------------------------------------------------------------------
 // PyO3 wrappers for PreparedData
 // ---------------------------------------------------------------------------
 
@@ -88,24 +117,23 @@ fn py_sig<'py>(
         let dim =
             Dim::new(d).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
+        let sl = siglength_fast(d, m);
+        let work = batch_size * sl * (n - 1);
         let results: Vec<Array1<f64>> = py.allow_threads(|| {
-            (0..batch_size)
-                .into_par_iter()
-                .map(|i| {
-                    let path_i: Array2<f64> = flat_batch
-                        .index_axis(Axis(0), i)
-                        .into_dimensionality::<ndarray::Ix2>()
-                        .expect("2d")
-                        .to_owned();
-                    if fmt == SigFormat::Cumulative {
-                        let cum = signature::sig_cumulative(&path_i, depth);
-                        Array1::from_iter(cum.iter().copied())
-                    } else {
-                        let levels = signature::sig_levels(&path_i, depth);
-                        crate::algebra::concat_levels(&levels)
-                    }
-                })
-                .collect()
+            collect_par_or_seq(batch_size, work, |i| {
+                let path_i: Array2<f64> = flat_batch
+                    .index_axis(Axis(0), i)
+                    .into_dimensionality::<ndarray::Ix2>()
+                    .expect("2d")
+                    .to_owned();
+                if fmt == SigFormat::Cumulative {
+                    let cum = signature::sig_cumulative(&path_i, depth);
+                    Array1::from_iter(cum.iter().copied())
+                } else {
+                    let levels = signature::sig_levels(&path_i, depth);
+                    crate::algebra::concat_levels(&levels)
+                }
+            })
         });
 
         if fmt == SigFormat::Cumulative {
@@ -198,23 +226,21 @@ fn py_sigcombine<'py>(
             .into_shape_with_order(IxDyn(&[batch_size, sl]))
             .expect("reshape");
 
+        let work = batch_size * sl;
         let results: Vec<Array1<f64>> = py.allow_threads(|| {
-            (0..batch_size)
-                .into_par_iter()
-                .map(|i| {
-                    let a = flat1
-                        .index_axis(Axis(0), i)
-                        .to_owned()
-                        .into_dimensionality::<ndarray::Ix1>()
-                        .expect("1d");
-                    let b = flat2
-                        .index_axis(Axis(0), i)
-                        .to_owned()
-                        .into_dimensionality::<ndarray::Ix1>()
-                        .expect("1d");
-                    signature::sigcombine(&a, &b, dim, depth)
-                })
-                .collect()
+            collect_par_or_seq(batch_size, work, |i| {
+                let a = flat1
+                    .index_axis(Axis(0), i)
+                    .to_owned()
+                    .into_dimensionality::<ndarray::Ix1>()
+                    .expect("1d");
+                let b = flat2
+                    .index_axis(Axis(0), i)
+                    .to_owned()
+                    .into_dimensionality::<ndarray::Ix1>()
+                    .expect("1d");
+                signature::sigcombine(&a, &b, dim, depth)
+            })
         });
 
         let mut out_shape = batch_shape;
@@ -280,18 +306,17 @@ fn py_logsig<'py>(
             .into_shape_with_order(IxDyn(&[batch_size, n, d]))
             .expect("reshape");
 
+        let sl = siglength_fast(d, prepared.depth.value());
+        let work = batch_size * sl * (n - 1);
         let results: Vec<Array1<f64>> = py.allow_threads(|| {
-            (0..batch_size)
-                .into_par_iter()
-                .map(|i| {
-                    let path_i: Array2<f64> = flat_batch
-                        .index_axis(Axis(0), i)
-                        .into_dimensionality::<ndarray::Ix2>()
-                        .expect("2d")
-                        .to_owned();
-                    logsignature::logsig(&path_i, &prepared)
-                })
-                .collect()
+            collect_par_or_seq(batch_size, work, |i| {
+                let path_i: Array2<f64> = flat_batch
+                    .index_axis(Axis(0), i)
+                    .into_dimensionality::<ndarray::Ix2>()
+                    .expect("2d")
+                    .to_owned();
+                logsignature::logsig(&path_i, &prepared)
+            })
         });
 
         let lsl = logsignature::logsiglength(prepared.dim, prepared.depth);
@@ -332,18 +357,17 @@ fn py_logsig_expanded<'py>(
             .into_shape_with_order(IxDyn(&[batch_size, n, d]))
             .expect("reshape");
 
+        let sl = siglength_fast(d, prepared.depth.value());
+        let work = batch_size * sl * (n - 1);
         let results: Vec<Array1<f64>> = py.allow_threads(|| {
-            (0..batch_size)
-                .into_par_iter()
-                .map(|i| {
-                    let path_i: Array2<f64> = flat_batch
-                        .index_axis(Axis(0), i)
-                        .into_dimensionality::<ndarray::Ix2>()
-                        .expect("2d")
-                        .to_owned();
-                    logsignature::logsig_expanded(&path_i, &prepared)
-                })
-                .collect()
+            collect_par_or_seq(batch_size, work, |i| {
+                let path_i: Array2<f64> = flat_batch
+                    .index_axis(Axis(0), i)
+                    .into_dimensionality::<ndarray::Ix2>()
+                    .expect("2d")
+                    .to_owned();
+                logsignature::logsig_expanded(&path_i, &prepared)
+            })
         });
 
         let sl = signature::siglength(prepared.dim, prepared.depth);
@@ -399,23 +423,22 @@ fn py_sigbackprop<'py>(
             .into_shape_with_order(IxDyn(&[batch_size, deriv_last]))
             .expect("reshape");
 
+        let sl = siglength_fast(d, m);
+        let work = batch_size * sl * (n - 1) * 5;
         let results: Vec<Array2<f64>> = py.allow_threads(|| {
-            (0..batch_size)
-                .into_par_iter()
-                .map(|i| {
-                    let p: Array2<f64> = flat_path
-                        .index_axis(Axis(0), i)
-                        .into_dimensionality::<ndarray::Ix2>()
-                        .expect("2d")
-                        .to_owned();
-                    let dv: Array1<f64> = flat_deriv
-                        .index_axis(Axis(0), i)
-                        .into_dimensionality::<ndarray::Ix1>()
-                        .expect("1d")
-                        .to_owned();
-                    backprop::sigbackprop(&dv, &p, depth)
-                })
-                .collect()
+            collect_par_or_seq(batch_size, work, |i| {
+                let p: Array2<f64> = flat_path
+                    .index_axis(Axis(0), i)
+                    .into_dimensionality::<ndarray::Ix2>()
+                    .expect("2d")
+                    .to_owned();
+                let dv: Array1<f64> = flat_deriv
+                    .index_axis(Axis(0), i)
+                    .into_dimensionality::<ndarray::Ix1>()
+                    .expect("1d")
+                    .to_owned();
+                backprop::sigbackprop(&dv, &p, depth)
+            })
         });
 
         let mut out_shape = batch_shape;
@@ -488,23 +511,22 @@ fn py_logsigbackprop<'py>(
             .into_shape_with_order(IxDyn(&[batch_size, deriv_last]))
             .expect("reshape");
 
+        let sl = siglength_fast(d, prepared.depth.value());
+        let work = batch_size * sl * (n - 1) * 5;
         let results: Vec<Array2<f64>> = py.allow_threads(|| {
-            (0..batch_size)
-                .into_par_iter()
-                .map(|i| {
-                    let p: Array2<f64> = flat_path
-                        .index_axis(Axis(0), i)
-                        .into_dimensionality::<ndarray::Ix2>()
-                        .expect("2d")
-                        .to_owned();
-                    let dv: Array1<f64> = flat_deriv
-                        .index_axis(Axis(0), i)
-                        .into_dimensionality::<ndarray::Ix1>()
-                        .expect("1d")
-                        .to_owned();
-                    backprop::logsigbackprop(&dv, &p, &prepared)
-                })
-                .collect()
+            collect_par_or_seq(batch_size, work, |i| {
+                let p: Array2<f64> = flat_path
+                    .index_axis(Axis(0), i)
+                    .into_dimensionality::<ndarray::Ix2>()
+                    .expect("2d")
+                    .to_owned();
+                let dv: Array1<f64> = flat_deriv
+                    .index_axis(Axis(0), i)
+                    .into_dimensionality::<ndarray::Ix1>()
+                    .expect("1d")
+                    .to_owned();
+                backprop::logsigbackprop(&dv, &p, &prepared)
+            })
         });
 
         let mut out_shape = batch_shape;
