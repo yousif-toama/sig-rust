@@ -44,7 +44,7 @@ jobs:
 
       - name: Test with coverage
         if: matrix.toolchain == 'stable'
-        run: cargo llvm-cov --lcov --output-path rust-lcov.info
+        run: cargo llvm-cov --lcov --output-path rust-lcov.info --ignore-filename-regex python
 
       - name: Test (nightly)
         if: matrix.toolchain == 'nightly'
@@ -110,9 +110,62 @@ jobs:
           name: python-coverage
           path: python-coverage.xml
 
+  combined-coverage:
+    name: Combined coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal \
+            --component llvm-tools-preview
+          rustup default stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@80e6af7a2ec7f280fffe2d0a9d3a12a9d11d86e9  # v2.75.1
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57  # v8.0.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --all-extras --group dev --group test
+
+      - name: Instrument and run tests
+        run: |
+          eval "$(cargo llvm-cov show-env --export-prefix)"
+          export CARGO_TARGET_DIR="$CARGO_LLVM_COV_TARGET_DIR"
+          cargo llvm-cov clean --workspace
+          cargo test
+          uv run maturin develop
+          uv run pytest --cov=python/sig_rust --cov-report=xml:python-coverage.xml
+          cargo llvm-cov report --lcov --output-path combined-lcov.info
+
+      - name: Upload combined coverage
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: combined-coverage
+          path: |
+            combined-lcov.info
+            python-coverage.xml
+
   coverage:
     name: Upload coverage
-    needs: [rust, python]
+    needs: [rust, python, combined-coverage]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment: codecov
@@ -130,12 +183,12 @@ jobs:
         with:
           name: rust-coverage
 
-      - name: Download Python coverage
+      - name: Download combined coverage
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          name: python-coverage
+          name: combined-coverage
 
-      - name: Upload Rust coverage to Codecov
+      - name: Upload Rust-only coverage to Codecov
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -149,4 +202,12 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: python-coverage.xml
           flags: python
+          fail_ci_if_error: true
+
+      - name: Upload combined coverage to Codecov
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: combined-lcov.info
+          flags: combined
           fail_ci_if_error: true

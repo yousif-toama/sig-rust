@@ -236,3 +236,154 @@ fn unproject_lyndon(deriv: &Array1<f64>, s: &PreparedData) -> LevelList {
 
     LevelList::from_flat_with_offsets(data, offsets, dim)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::algebra::concat_levels;
+    use crate::logsignature;
+    use approx::assert_relative_eq;
+
+    fn depth_val(m: usize) -> Depth {
+        Depth::new(m).expect("valid depth")
+    }
+
+    fn make_path(data: &[f64], n: usize, d: usize) -> Array2<f64> {
+        Array2::from_shape_vec((n, d), data.to_vec()).expect("valid shape")
+    }
+
+    #[test]
+    fn test_sigbackprop_finite_diff() {
+        let path = make_path(&[0.0, 0.0, 1.0, 0.5, 0.5, 1.5, 2.0, 0.0, 1.5, 1.0], 5, 2);
+        let m = depth_val(2);
+        let sig_flat = concat_levels(&crate::signature::sig_levels(&path, m));
+        let deriv = Array1::ones(sig_flat.len());
+
+        let grad = sigbackprop(&deriv, &path, m);
+        let eps = 1e-6;
+
+        for a in 0..path.nrows() {
+            for b in 0..path.ncols() {
+                let mut p_plus = path.clone();
+                let mut p_minus = path.clone();
+                p_plus[[a, b]] += eps;
+                p_minus[[a, b]] -= eps;
+                let s_plus: f64 = concat_levels(&crate::signature::sig_levels(&p_plus, m))
+                    .iter()
+                    .zip(deriv.iter())
+                    .map(|(&s, &d)| s * d)
+                    .sum();
+                let s_minus: f64 = concat_levels(&crate::signature::sig_levels(&p_minus, m))
+                    .iter()
+                    .zip(deriv.iter())
+                    .map(|(&s, &d)| s * d)
+                    .sum();
+                let numerical = (s_plus - s_minus) / (2.0 * eps);
+                assert_relative_eq!(grad[[a, b]], numerical, epsilon = 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn test_sigbackprop_zero_deriv() {
+        let path = make_path(&[0.0, 0.0, 1.0, 1.0, 2.0, 0.0], 3, 2);
+        let m = depth_val(2);
+        let deriv = Array1::zeros(siglength(Dim::new(2).expect("ok"), m));
+        let grad = sigbackprop(&deriv, &path, m);
+        assert!(grad.iter().all(|&x| x.abs() < 1e-14));
+    }
+
+    #[test]
+    fn test_sigbackprop_short_path() {
+        let path = make_path(&[1.0, 2.0], 1, 2);
+        let m = depth_val(2);
+        let grad = sigbackprop(&Array1::ones(6), &path, m);
+        assert_eq!(grad.dim(), (1, 2));
+        assert!(grad.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_sigbackprop_single_segment() {
+        let path = make_path(&[0.0, 0.0, 1.0, 2.0], 2, 2);
+        let m = depth_val(2);
+        let sig_flat = concat_levels(&crate::signature::sig_levels(&path, m));
+        let deriv = Array1::ones(sig_flat.len());
+        let grad = sigbackprop(&deriv, &path, m);
+        // Should be non-zero and have correct shape
+        assert_eq!(grad.dim(), (2, 2));
+        assert!(grad.iter().any(|&x| x.abs() > 1e-10));
+    }
+
+    #[test]
+    fn test_sigjacobian_shape() {
+        let path = make_path(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 2.0, 1.0], 4, 2);
+        let m = depth_val(2);
+        let jac = sigjacobian(&path, m);
+        assert_eq!(jac.dim(), (4, 2, 6));
+    }
+
+    #[test]
+    fn test_sigjacobian_finite_diff() {
+        let path = make_path(&[0.0, 0.0, 1.0, 0.5, 1.5, 1.0], 3, 2);
+        let m = depth_val(2);
+        let jac = sigjacobian(&path, m);
+        let eps = 1e-6;
+
+        for a in 0..path.nrows() {
+            for b in 0..path.ncols() {
+                let mut p_plus = path.clone();
+                let mut p_minus = path.clone();
+                p_plus[[a, b]] += eps;
+                p_minus[[a, b]] -= eps;
+                let s_plus = concat_levels(&crate::signature::sig_levels(&p_plus, m));
+                let s_minus = concat_levels(&crate::signature::sig_levels(&p_minus, m));
+                for c in 0..s_plus.len() {
+                    let numerical = (s_plus[c] - s_minus[c]) / (2.0 * eps);
+                    assert_relative_eq!(jac[[a, b, c]], numerical, epsilon = 1e-4);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_logsigbackprop_finite_diff() {
+        let path = make_path(&[0.0, 0.0, 1.0, 0.5, 0.5, 1.5, 2.0, 0.0], 4, 2);
+        let d = Dim::new(2).expect("ok");
+        let m = depth_val(2);
+        let s = logsignature::prepare_with_method(d, m, false);
+        let deriv = Array1::ones(logsignature::logsiglength(d, m));
+
+        let grad = logsigbackprop(&deriv, &path, &s);
+        let eps = 1e-6;
+
+        for a in 0..path.nrows() {
+            for b in 0..path.ncols() {
+                let mut p_plus = path.clone();
+                let mut p_minus = path.clone();
+                p_plus[[a, b]] += eps;
+                p_minus[[a, b]] -= eps;
+                let ls_plus = logsignature::logsig(&p_plus, &s);
+                let ls_minus = logsignature::logsig(&p_minus, &s);
+                let numerical: f64 = ls_plus
+                    .iter()
+                    .zip(ls_minus.iter())
+                    .zip(deriv.iter())
+                    .map(|((&p, &m), &d)| (p - m) / (2.0 * eps) * d)
+                    .sum();
+                assert_relative_eq!(grad[[a, b]], numerical, epsilon = 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn test_logsigbackprop_short_path() {
+        let path = make_path(&[1.0, 2.0], 1, 2);
+        let d = Dim::new(2).expect("ok");
+        let m = depth_val(2);
+        let s = logsignature::prepare(d, m);
+        let deriv = Array1::ones(logsignature::logsiglength(d, m));
+        let grad = logsigbackprop(&deriv, &path, &s);
+        assert_eq!(grad.dim(), (1, 2));
+        assert!(grad.iter().all(|&x| x == 0.0));
+    }
+}

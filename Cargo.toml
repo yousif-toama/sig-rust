@@ -20,6 +20,9 @@ approx = "0.5"
 rand = "0.10"
 rand_chacha = "0.10"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)'] }
+
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 unwrap_used = "deny"

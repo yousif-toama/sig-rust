@@ -340,3 +340,276 @@ impl BatchedLevelList {
         Self::new(levels, self.dim, new_batch)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+
+    fn dim(d: usize) -> Dim {
+        Dim::new(d).expect("valid dim")
+    }
+
+    fn depth(m: usize) -> Depth {
+        Depth::new(m).expect("valid depth")
+    }
+
+    // --- Dim tests ---
+
+    #[test]
+    fn test_dim_new_valid() {
+        let d = Dim::new(3).expect("should succeed");
+        assert_eq!(d.value(), 3);
+    }
+
+    #[test]
+    fn test_dim_new_zero_fails() {
+        assert!(Dim::new(0).is_err());
+    }
+
+    #[test]
+    fn test_dim_pow() {
+        let d = dim(2);
+        assert_eq!(d.pow(0), 1);
+        assert_eq!(d.pow(1), 2);
+        assert_eq!(d.pow(3), 8);
+        assert_eq!(d.pow(10), 1024);
+    }
+
+    #[test]
+    fn test_dim_equality() {
+        assert_eq!(dim(5), dim(5));
+        assert_ne!(dim(5), dim(3));
+    }
+
+    #[test]
+    fn test_dim_copy() {
+        let d = dim(3);
+        let d2 = d;
+        assert_eq!(d.value(), d2.value());
+    }
+
+    // --- Depth tests ---
+
+    #[test]
+    fn test_depth_new_valid() {
+        let m = Depth::new(4).expect("should succeed");
+        assert_eq!(m.value(), 4);
+    }
+
+    #[test]
+    fn test_depth_new_zero_fails() {
+        assert!(Depth::new(0).is_err());
+    }
+
+    #[test]
+    fn test_depth_equality() {
+        assert_eq!(depth(3), depth(3));
+        assert_ne!(depth(3), depth(2));
+    }
+
+    // --- LevelList tests ---
+
+    #[test]
+    fn test_zeros() {
+        let ll = LevelList::zeros(dim(2), depth(3));
+        assert_eq!(ll.depth(), 3);
+        assert_eq!(ll.dim(), dim(2));
+        assert_eq!(ll.level(0).len(), 2);
+        assert_eq!(ll.level(1).len(), 4);
+        assert_eq!(ll.level(2).len(), 8);
+        assert!(ll.data().iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_from_levels() {
+        let l0: &[f64] = &[1.0, 2.0];
+        let l1: &[f64] = &[3.0, 4.0, 5.0, 6.0];
+        let ll = LevelList::from_levels(&[l0, l1], dim(2));
+        assert_eq!(ll.depth(), 2);
+        assert_eq!(ll.level(0), &[1.0, 2.0]);
+        assert_eq!(ll.level(1), &[3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_from_level_vecs() {
+        let l0 = vec![1.0, 2.0];
+        let l1 = vec![3.0, 4.0, 5.0, 6.0];
+        let ll = LevelList::from_level_vecs(&[l0, l1], dim(2));
+        assert_eq!(ll.depth(), 2);
+        assert_eq!(ll.level(0), &[1.0, 2.0]);
+        assert_eq!(ll.level(1), &[3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_from_flat_with_offsets() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let offsets = vec![0, 2, 6];
+        let ll = LevelList::from_flat_with_offsets(data, offsets, dim(2));
+        assert_eq!(ll.level(0), &[1.0, 2.0]);
+        assert_eq!(ll.level(1), &[3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_from_flat() {
+        let flat = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let ll = LevelList::from_flat(&flat, dim(2), depth(2));
+        assert_eq!(ll.level(0).len(), 2);
+        assert_eq!(ll.level(1).len(), 4);
+        assert_eq!(ll.level(0), &[1.0, 2.0]);
+        assert_eq!(ll.level(1), &[3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_to_flat_and_into_flat() {
+        let ll = LevelList::from_levels(&[&[1.0, 2.0], &[3.0, 4.0, 5.0, 6.0]], dim(2));
+        let flat_clone = ll.to_flat();
+        let flat_owned = ll.into_flat();
+        assert_eq!(flat_clone, flat_owned);
+        assert_eq!(flat_owned, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_level_mut() {
+        let mut ll = LevelList::zeros(dim(2), depth(2));
+        ll.level_mut(0).copy_from_slice(&[1.0, 2.0]);
+        assert_eq!(ll.level(0), &[1.0, 2.0]);
+        assert!(ll.level(1).iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_add_assign() {
+        let mut a = LevelList::from_levels(&[&[1.0, 2.0]], dim(2));
+        let b = LevelList::from_levels(&[&[3.0, 4.0]], dim(2));
+        a.add_assign(&b);
+        assert_eq!(a.level(0), &[4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_scaled_add() {
+        let mut a = LevelList::from_levels(&[&[1.0, 2.0]], dim(2));
+        let b = LevelList::from_levels(&[&[3.0, 4.0]], dim(2));
+        a.scaled_add(2.0, &b);
+        assert_eq!(a.level(0), &[7.0, 10.0]);
+    }
+
+    #[test]
+    fn test_copy_from() {
+        let mut a = LevelList::zeros(dim(2), depth(1));
+        let b = LevelList::from_levels(&[&[5.0, 6.0]], dim(2));
+        a.copy_from(&b);
+        assert_eq!(a.data(), b.data());
+    }
+
+    #[test]
+    fn test_set_sum() {
+        let a = LevelList::from_levels(&[&[1.0, 2.0]], dim(2));
+        let b = LevelList::from_levels(&[&[3.0, 4.0]], dim(2));
+        let mut c = LevelList::zeros(dim(2), depth(1));
+        c.set_sum(&a, &b);
+        assert_eq!(c.level(0), &[4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_set_sub() {
+        let a = LevelList::from_levels(&[&[5.0, 7.0]], dim(2));
+        let b = LevelList::from_levels(&[&[3.0, 4.0]], dim(2));
+        let mut c = LevelList::zeros(dim(2), depth(1));
+        c.set_sub(&a, &b);
+        assert_eq!(c.level(0), &[2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_levels_split() {
+        let mut ll = LevelList::from_levels(&[&[1.0, 2.0], &[3.0, 4.0, 5.0, 6.0]], dim(2));
+        let (lo, hi) = ll.levels_split(0, 1);
+        assert_eq!(lo, &[1.0, 2.0]);
+        assert_eq!(hi.len(), 4);
+    }
+
+    #[test]
+    fn test_fill_zero() {
+        let mut ll = LevelList::from_levels(&[&[1.0, 2.0], &[3.0, 4.0, 5.0, 6.0]], dim(2));
+        ll.fill_zero();
+        assert!(ll.data().iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_negate_even_indexed_levels() {
+        let mut ll = LevelList::from_levels(&[&[1.0], &[2.0], &[3.0]], dim(1));
+        ll.negate_even_indexed_levels();
+        assert_eq!(ll.level(0), &[-1.0]); // index 0 negated
+        assert_eq!(ll.level(1), &[2.0]); // index 1 unchanged
+        assert_eq!(ll.level(2), &[-3.0]); // index 2 negated
+    }
+
+    // --- BatchedLevelList tests ---
+
+    #[test]
+    fn test_batched_new_and_get() {
+        let l0 = Array2::from_shape_vec((3, 2), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .expect("valid shape");
+        let l1 = Array2::zeros((3, 4));
+        let bll = BatchedLevelList::new(vec![l0, l1], dim(2), 3);
+
+        assert_eq!(bll.batch_size(), 3);
+        assert_eq!(bll.depth(), 2);
+        assert_eq!(bll.dim(), dim(2));
+
+        let elem = bll.get(1);
+        assert_eq!(elem.level(0), &[3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_split_even_odd() {
+        let l0 = Array2::from_shape_vec(
+            (4, 2),
+            vec![
+                1.0, 2.0, // row 0 (even)
+                3.0, 4.0, // row 1 (odd)
+                5.0, 6.0, // row 2 (even)
+                7.0, 8.0, // row 3 (odd)
+            ],
+        )
+        .expect("valid shape");
+        let bll = BatchedLevelList::new(vec![l0], dim(2), 4);
+        let (even, odd) = bll.split_even_odd();
+
+        assert_eq!(even.batch_size(), 2);
+        assert_eq!(odd.batch_size(), 2);
+        assert_eq!(even.get(0).level(0), &[1.0, 2.0]);
+        assert_eq!(even.get(1).level(0), &[5.0, 6.0]);
+        assert_eq!(odd.get(0).level(0), &[3.0, 4.0]);
+        assert_eq!(odd.get(1).level(0), &[7.0, 8.0]);
+    }
+
+    #[test]
+    fn test_last_row_and_without_last() {
+        let l0 = Array2::from_shape_vec((3, 2), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .expect("valid shape");
+        let bll = BatchedLevelList::new(vec![l0], dim(2), 3);
+
+        let last = bll.last_row();
+        assert_eq!(last.batch_size(), 1);
+        assert_eq!(last.get(0).level(0), &[5.0, 6.0]);
+
+        let without = bll.without_last();
+        assert_eq!(without.batch_size(), 2);
+        assert_eq!(without.get(0).level(0), &[1.0, 2.0]);
+        assert_eq!(without.get(1).level(0), &[3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_append() {
+        let l0a = Array2::from_shape_vec((2, 2), vec![1.0, 2.0, 3.0, 4.0]).expect("valid");
+        let l0b = Array2::from_shape_vec((1, 2), vec![5.0, 6.0]).expect("valid");
+        let a = BatchedLevelList::new(vec![l0a], dim(2), 2);
+        let b = BatchedLevelList::new(vec![l0b], dim(2), 1);
+        let combined = a.append(&b);
+
+        assert_eq!(combined.batch_size(), 3);
+        assert_eq!(combined.get(0).level(0), &[1.0, 2.0]);
+        assert_eq!(combined.get(1).level(0), &[3.0, 4.0]);
+        assert_eq!(combined.get(2).level(0), &[5.0, 6.0]);
+    }
+}

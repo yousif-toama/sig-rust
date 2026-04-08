@@ -355,3 +355,180 @@ fn build_level_projection(d: usize, k: usize, words: &[&Vec<u8>]) -> LevelProjec
 
     LevelProjection { simples, triangles }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+    use ndarray::Array2;
+
+    fn dim(d: usize) -> Dim {
+        Dim::new(d).expect("valid dim")
+    }
+
+    fn depth_val(m: usize) -> Depth {
+        Depth::new(m).expect("valid depth")
+    }
+
+    // --- Private helper tests ---
+
+    #[test]
+    fn test_divisors() {
+        assert_eq!(divisors(1), vec![1]);
+        assert_eq!(divisors(7), vec![1, 7]);
+        assert_eq!(divisors(12), vec![1, 2, 3, 4, 6, 12]);
+    }
+
+    #[test]
+    fn test_mobius() {
+        assert_eq!(mobius(1), 1);
+        assert_eq!(mobius(2), -1);
+        assert_eq!(mobius(3), -1);
+        assert_eq!(mobius(4), 0); // 2^2
+        assert_eq!(mobius(6), 1); // 2*3
+        assert_eq!(mobius(30), -1); // 2*3*5
+    }
+
+    #[test]
+    fn test_necklace_count() {
+        assert_eq!(necklace_count(2, 1), 2);
+        assert_eq!(necklace_count(2, 2), 1);
+        assert_eq!(necklace_count(2, 3), 2);
+        assert_eq!(necklace_count(3, 2), 3);
+    }
+
+    #[test]
+    fn test_logsiglength_d2_m2() {
+        // 2 letters + 1 bracket [1,2] = 3
+        assert_eq!(logsiglength(dim(2), depth_val(2)), 3);
+    }
+
+    #[test]
+    fn test_logsiglength_d2_m3() {
+        // 2 + 1 + 2 = 5
+        assert_eq!(logsiglength(dim(2), depth_val(3)), 5);
+    }
+
+    #[test]
+    fn test_logsiglength_d3_m2() {
+        // 3 letters + 3 brackets = 6
+        assert_eq!(logsiglength(dim(3), depth_val(2)), 6);
+    }
+
+    // --- should_use_bch ---
+
+    #[test]
+    fn test_should_use_bch_heuristic() {
+        assert!(should_use_bch(dim(2), depth_val(2)));
+        assert!(should_use_bch(dim(2), depth_val(4)));
+        assert!(should_use_bch(dim(3), depth_val(3)));
+        assert!(!should_use_bch(dim(2), depth_val(5)));
+        assert!(!should_use_bch(dim(5), depth_val(5)));
+        assert!(!should_use_bch(dim(1), depth_val(2)));
+    }
+
+    // --- prepare ---
+
+    #[test]
+    fn test_prepare_creates_valid_data() {
+        let s = prepare(dim(2), depth_val(3));
+        assert_eq!(s.dim, dim(2));
+        assert_eq!(s.depth, depth_val(3));
+        assert!(!s.lyndon_words.is_empty());
+        assert_eq!(s.basis_labels.len(), s.lyndon_words.len());
+        assert_eq!(s.lyndon_words.len(), logsiglength(dim(2), depth_val(3)));
+    }
+
+    #[test]
+    fn test_prepare_with_method_forces_bch() {
+        // Use dim=4 depth=2 (normally would NOT use BCH), but force it
+        let s_bch = prepare_with_method(dim(4), depth_val(2), true);
+        assert!(s_bch.bch_data.is_some());
+
+        // Use dim=2 depth=2 (normally WOULD use BCH), but force S method
+        let s_no_bch = prepare_with_method(dim(2), depth_val(2), false);
+        assert!(s_no_bch.bch_data.is_none());
+    }
+
+    // --- basis ---
+
+    #[test]
+    fn test_basis_labels_d2_m2() {
+        let s = prepare(dim(2), depth_val(2));
+        let labels = basis(&s);
+        assert_eq!(labels, vec!["1", "2", "[1,2]"]);
+    }
+
+    // --- logsig ---
+
+    #[test]
+    fn test_logsig_straight_line() {
+        // Straight line: logsig should have only level 1 nonzero
+        let path =
+            Array2::from_shape_vec((3, 2), vec![0.0, 0.0, 1.0, 2.0, 2.0, 4.0]).expect("valid");
+        let s = prepare_with_method(dim(2), depth_val(3), false);
+        let ls = logsig(&path, &s);
+        // Level 1 = total displacement [2, 4]
+        assert_relative_eq!(ls[0], 2.0, epsilon = 1e-10);
+        assert_relative_eq!(ls[1], 4.0, epsilon = 1e-10);
+        // Higher levels should be ~0
+        for i in 2..ls.len() {
+            assert_relative_eq!(ls[i], 0.0, epsilon = 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_logsig_single_point_is_zero() {
+        let path = Array2::from_shape_vec((1, 2), vec![1.0, 2.0]).expect("valid");
+        let s = prepare(dim(2), depth_val(2));
+        let ls = logsig(&path, &s);
+        assert!(ls.iter().all(|&x| x == 0.0));
+        assert_eq!(ls.len(), logsiglength(dim(2), depth_val(2)));
+    }
+
+    #[test]
+    fn test_logsig_expanded_matches_tensor_log() {
+        let path = Array2::from_shape_vec((4, 2), vec![0.0, 0.0, 1.0, 0.5, 1.5, 1.0, 2.0, 0.0])
+            .expect("valid");
+        let s = prepare(dim(2), depth_val(3));
+
+        let expanded = logsig_expanded(&path, &s);
+
+        // Compute directly: sig -> tensor_log -> concat
+        let levels = crate::signature::sig_levels(&path, depth_val(3));
+        let log_levels = tensor_log(&levels);
+        let direct = concat_levels(&log_levels);
+
+        for (a, b) in expanded.iter().zip(direct.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_logsig_s_method_matches_expanded_projected() {
+        // S-method logsig should equal projecting the expanded logsig
+        let path = Array2::from_shape_vec((4, 2), vec![0.0, 0.0, 1.0, 0.5, 0.5, 1.5, 2.0, 1.0])
+            .expect("valid");
+        let s = prepare_with_method(dim(2), depth_val(3), false);
+
+        let ls = logsig(&path, &s);
+        let expanded = logsig_expanded(&path, &s);
+
+        // Manually project expanded through projection matrices
+        let mut projected = Vec::new();
+        let mut offset = 0;
+        for proj in &s.projection_matrices {
+            let n_tensor = proj.ncols();
+            let tensor_level = expanded.slice(ndarray::s![offset..offset + n_tensor]);
+            let coords = proj.dot(&tensor_level);
+            for &c in &coords {
+                projected.push(c);
+            }
+            offset += n_tensor;
+        }
+
+        for (a, b) in ls.iter().zip(projected.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-10);
+        }
+    }
+}

@@ -219,3 +219,110 @@ fn svd_thin(mat: &Array2<f64>) -> (Array2<f64>, Vec<f64>) {
     let (u, sigmas, _vt) = crate::lyndon::jacobi_svd(mat);
     (u, sigmas)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    fn depth_val(m: usize) -> Depth {
+        Depth::new(m).expect("valid depth")
+    }
+
+    #[test]
+    fn test_rotinv2dprepare_type_a() {
+        let s = rotinv2dprepare(depth_val(4), "a").expect("should succeed");
+        assert_eq!(s.inv_type, "a");
+        assert!(!s.coefficients.is_empty());
+        assert!(s.total_length > 0);
+    }
+
+    #[test]
+    fn test_rotinv2dprepare_unsupported_type() {
+        assert!(rotinv2dprepare(depth_val(4), "b").is_err());
+        assert!(rotinv2dprepare(depth_val(4), "xyz").is_err());
+    }
+
+    #[test]
+    fn test_rotinv2dprepare_depth1() {
+        // Depth 1: no even levels, so no coefficients
+        let s = rotinv2dprepare(depth_val(1), "a").expect("should succeed");
+        assert_eq!(s.total_length, 0);
+        assert!(s.coefficients.is_empty());
+    }
+
+    #[test]
+    fn test_rotinv2d_not_2d_error() {
+        let s = rotinv2dprepare(depth_val(4), "a").expect("ok");
+        let path_3d =
+            Array2::from_shape_vec((3, 3), vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0])
+                .expect("valid");
+        assert!(rotinv2d(&path_3d, &s).is_err());
+    }
+
+    #[test]
+    fn test_rotinv2d_output_length() {
+        let s = rotinv2dprepare(depth_val(4), "a").expect("ok");
+        let path = Array2::from_shape_vec((4, 2), vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])
+            .expect("valid");
+        let result = rotinv2d(&path, &s).expect("ok");
+        assert_eq!(result.len(), rotinv2dlength(&s));
+    }
+
+    #[test]
+    fn test_rotinv2d_rotation_invariance() {
+        let s = rotinv2dprepare(depth_val(4), "a").expect("ok");
+        let path = Array2::from_shape_vec((4, 2), vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])
+            .expect("valid");
+
+        let inv_orig = rotinv2d(&path, &s).expect("ok");
+
+        // Rotate path by pi/3
+        let theta = std::f64::consts::FRAC_PI_3;
+        let cos_t = theta.cos();
+        let sin_t = theta.sin();
+        let mut rotated = Array2::zeros(path.dim());
+        for i in 0..path.nrows() {
+            rotated[[i, 0]] = cos_t * path[[i, 0]] - sin_t * path[[i, 1]];
+            rotated[[i, 1]] = sin_t * path[[i, 0]] + cos_t * path[[i, 1]];
+        }
+
+        let inv_rotated = rotinv2d(&rotated, &s).expect("ok");
+
+        for (a, b) in inv_orig.iter().zip(inv_rotated.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_rotinv2dlength_matches_coefficients() {
+        let s = rotinv2dprepare(depth_val(6), "a").expect("ok");
+        let from_coeffs: usize = rotinv2dcoeffs(&s).iter().map(Array2::nrows).sum();
+        assert_eq!(rotinv2dlength(&s), from_coeffs);
+    }
+
+    #[test]
+    fn test_balanced_indices_level2() {
+        // level=2, half_level=1: positions where exactly 1 of 2 bits is set
+        let indices = balanced_indices(2, 1);
+        assert_eq!(indices, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_balanced_indices_level4() {
+        let indices = balanced_indices(4, 2);
+        // C(4,2) = 6 balanced indices
+        assert_eq!(indices.len(), 6);
+    }
+
+    #[test]
+    fn test_rotinv2dcoeffs_shapes() {
+        let s = rotinv2dprepare(depth_val(6), "a").expect("ok");
+        let coeffs = rotinv2dcoeffs(&s);
+        assert_eq!(coeffs.len(), 3); // levels 2, 4, 6
+        for (j, c) in coeffs.iter().enumerate() {
+            let level = 2 * (j + 1);
+            assert_eq!(c.ncols(), 2usize.pow(level as u32));
+        }
+    }
+}

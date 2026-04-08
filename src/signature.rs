@@ -139,3 +139,150 @@ pub fn sigcombine(sig1: &Array1<f64>, sig2: &Array1<f64>, dim: Dim, depth: Depth
     let result = tensor_multiply(&levels1, &levels2);
     concat_levels(&result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    fn dim(d: usize) -> Dim {
+        Dim::new(d).expect("valid dim")
+    }
+
+    fn depth(m: usize) -> Depth {
+        Depth::new(m).expect("valid depth")
+    }
+
+    #[test]
+    fn test_siglength_d1() {
+        assert_eq!(siglength(dim(1), depth(5)), 5);
+    }
+
+    #[test]
+    fn test_siglength_d2_m2() {
+        // 2 + 4 = 6
+        assert_eq!(siglength(dim(2), depth(2)), 6);
+    }
+
+    #[test]
+    fn test_siglength_d3_m3() {
+        // 3 + 9 + 27 = 39
+        assert_eq!(siglength(dim(3), depth(3)), 39);
+    }
+
+    #[test]
+    fn test_siglength_formula() {
+        for d in 2usize..=5 {
+            for m in 1usize..=4 {
+                let expected = d * (d.pow(m as u32) - 1) / (d - 1);
+                assert_eq!(siglength(dim(d), depth(m)), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_sigformat_from_int() {
+        assert_eq!(SigFormat::from_int(0).expect("ok"), SigFormat::Flat);
+        assert_eq!(SigFormat::from_int(1).expect("ok"), SigFormat::Levels);
+        assert_eq!(SigFormat::from_int(2).expect("ok"), SigFormat::Cumulative);
+        assert!(SigFormat::from_int(3).is_err());
+    }
+
+    #[test]
+    fn test_sig_flat_format() {
+        let path =
+            Array2::from_shape_vec((3, 2), vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]).expect("valid");
+        let result = sig(&path, depth(2), SigFormat::Flat);
+        match result {
+            SigResult::Flat(flat) => assert_eq!(flat.len(), 6),
+            _ => unreachable!("expected Flat variant"),
+        }
+    }
+
+    #[test]
+    fn test_sig_levels_format() {
+        let path =
+            Array2::from_shape_vec((3, 2), vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]).expect("valid");
+        let result = sig(&path, depth(2), SigFormat::Levels);
+        match result {
+            SigResult::Levels(ll) => {
+                assert_eq!(ll.depth(), 2);
+                assert_eq!(ll.level(0).len(), 2);
+                assert_eq!(ll.level(1).len(), 4);
+            }
+            _ => unreachable!("expected Levels variant"),
+        }
+    }
+
+    #[test]
+    fn test_sig_single_point() {
+        let path = Array2::from_shape_vec((1, 2), vec![1.0, 2.0]).expect("valid");
+        let levels = sig_levels(&path, depth(3));
+        assert!(levels.data().iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_sig_straight_line() {
+        // Straight line: all points collinear, so sig = exp(total_displacement)
+        let path = Array2::from_shape_vec((3, 1), vec![0.0, 1.0, 2.0]).expect("valid");
+        let levels = sig_levels(&path, depth(3));
+        // Total displacement = 2
+        assert_relative_eq!(levels.level(0)[0], 2.0, epsilon = 1e-12);
+        assert_relative_eq!(levels.level(1)[0], 2.0, epsilon = 1e-12); // 2^2/2
+        assert_relative_eq!(levels.level(2)[0], 4.0 / 3.0, epsilon = 1e-12); // 2^3/6
+    }
+
+    #[test]
+    fn test_sig_cumulative_shape() {
+        let path = Array2::from_shape_vec((4, 2), vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 2.0, 1.0])
+            .expect("valid");
+        let cum = sig_cumulative(&path, depth(2));
+        assert_eq!(cum.nrows(), 3); // n-1 rows
+        assert_eq!(cum.ncols(), 6); // siglength(2, 2)
+    }
+
+    #[test]
+    fn test_sigcombine_chen_identity() {
+        let path = Array2::from_shape_vec(
+            (5, 2),
+            vec![0.0, 0.0, 1.0, 0.5, 1.5, 1.0, 2.0, 0.5, 3.0, 1.0],
+        )
+        .expect("valid");
+        let d = dim(2);
+        let m = depth(3);
+
+        // Sig of full path
+        let full = concat_levels(&sig_levels(&path, m));
+
+        // Sig of first 3 points and last 3 points (overlapping at point 2)
+        let path1 = path.slice(ndarray::s![..3, ..]).to_owned();
+        let path2 = path.slice(ndarray::s![2.., ..]).to_owned();
+        let sig1 = concat_levels(&sig_levels(&path1, m));
+        let sig2 = concat_levels(&sig_levels(&path2, m));
+
+        let combined = sigcombine(&sig1, &sig2, d, m);
+        for (a, b) in full.iter().zip(combined.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_sig_levels_matches_flat() {
+        let path = Array2::from_shape_vec((4, 2), vec![0.0, 0.0, 1.0, 0.5, 1.5, 1.0, 2.0, 0.0])
+            .expect("valid");
+        let m = depth(3);
+
+        let levels = sig_levels(&path, m);
+        let from_levels = concat_levels(&levels);
+
+        let result = sig(&path, m, SigFormat::Flat);
+        match result {
+            SigResult::Flat(flat) => {
+                for (a, b) in from_levels.iter().zip(flat.iter()) {
+                    assert_relative_eq!(a, b, epsilon = 1e-14);
+                }
+            }
+            _ => unreachable!("expected Flat"),
+        }
+    }
+}

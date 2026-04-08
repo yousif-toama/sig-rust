@@ -27,9 +27,9 @@ rust-fmt-check:
 rust-fmt:
     cargo fmt
 
-# Run Rust tests with coverage
+# Run Rust tests with coverage (excludes python.rs PyO3 wrappers)
 rust-test-cov:
-    cargo llvm-cov --lcov --output-path rust-lcov.info
+    cargo llvm-cov --lcov --output-path rust-lcov.info --ignore-filename-regex python
 
 # --- Python ---
 
@@ -66,8 +66,18 @@ test-cov:
 # Auto-format everything
 format-all: rust-fmt format
 
-# Run full test suite with coverage (Rust + Python)
-test-cov-all: rust-test-cov test-cov
+# Run full test suite with combined coverage (Rust + Python → single LCOV)
+# Instruments Rust so pytest exercising PyO3 bindings also generates coverage data.
+test-cov-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(cargo llvm-cov show-env --export-prefix)"
+    export CARGO_TARGET_DIR="$CARGO_LLVM_COV_TARGET_DIR"
+    cargo llvm-cov clean --workspace
+    cargo test
+    uv run maturin develop
+    uv run pytest --cov=python/sig_rust --cov-report=term-missing --cov-report=xml:python-coverage.xml
+    cargo llvm-cov report --lcov --output-path combined-lcov.info
 
 # Run quick benchmark
 bench:

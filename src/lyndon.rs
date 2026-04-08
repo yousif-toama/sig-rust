@@ -275,3 +275,179 @@ pub(crate) fn outer_flat(a: &Array1<f64>, b: &Array1<f64>) -> Array1<f64> {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    // --- generate_lyndon_words ---
+
+    #[test]
+    fn test_generate_lyndon_words_d2_m3() {
+        let words = generate_lyndon_words(2, 3);
+        assert_eq!(
+            words,
+            vec![vec![0], vec![0, 0, 1], vec![0, 1], vec![0, 1, 1], vec![1],]
+        );
+    }
+
+    #[test]
+    fn test_generate_lyndon_words_d3_m1() {
+        let words = generate_lyndon_words(3, 1);
+        assert_eq!(words, vec![vec![0], vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn test_generate_lyndon_words_empty() {
+        assert!(generate_lyndon_words(0, 5).is_empty());
+        assert!(generate_lyndon_words(3, 0).is_empty());
+    }
+
+    // --- is_lyndon ---
+
+    #[test]
+    fn test_is_lyndon_single_letter() {
+        assert!(is_lyndon(&[0]));
+        assert!(is_lyndon(&[2]));
+    }
+
+    #[test]
+    fn test_is_lyndon_true() {
+        assert!(is_lyndon(&[0, 1]));
+        assert!(is_lyndon(&[0, 0, 1]));
+    }
+
+    #[test]
+    fn test_is_lyndon_false() {
+        assert!(!is_lyndon(&[1, 0]));
+        assert!(!is_lyndon(&[0, 0]));
+        assert!(!is_lyndon(&[]));
+    }
+
+    // --- standard_factorization ---
+
+    #[test]
+    fn test_standard_factorization_simple() {
+        let (u, v) = standard_factorization(&[0, 1]).expect("valid");
+        assert_eq!(u, vec![0]);
+        assert_eq!(v, vec![1]);
+
+        let (u, v) = standard_factorization(&[0, 0, 1]).expect("valid");
+        assert_eq!(u, vec![0]);
+        assert_eq!(v, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_standard_factorization_error_single_letter() {
+        assert!(standard_factorization(&[0]).is_err());
+    }
+
+    // --- lyndon_bracket ---
+
+    #[test]
+    fn test_lyndon_bracket_single() {
+        assert_eq!(lyndon_bracket(&[0], true), "1");
+        assert_eq!(lyndon_bracket(&[1], false), "1");
+        assert_eq!(lyndon_bracket(&[0], false), "0");
+    }
+
+    #[test]
+    fn test_lyndon_bracket_composite() {
+        assert_eq!(lyndon_bracket(&[0, 1], true), "[1,2]");
+        assert_eq!(lyndon_bracket(&[0, 0, 1], true), "[1,[1,2]]");
+    }
+
+    // --- lyndon_to_tensor ---
+
+    #[test]
+    fn test_lyndon_to_tensor_single() {
+        let t = lyndon_to_tensor(&[0], 2);
+        assert_eq!(t.as_slice().expect("c"), &[1.0, 0.0]);
+
+        let t = lyndon_to_tensor(&[1], 2);
+        assert_eq!(t.as_slice().expect("c"), &[0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_lyndon_to_tensor_bracket() {
+        // [0,1] in d=2: e0 (x) e1 - e1 (x) e0 = [0,1,-1,0]
+        let t = lyndon_to_tensor(&[0, 1], 2);
+        assert_eq!(t.as_slice().expect("c"), &[0.0, 1.0, -1.0, 0.0]);
+    }
+
+    // --- build_projection_matrices ---
+
+    #[test]
+    fn test_build_projection_matrices_shapes() {
+        let words = generate_lyndon_words(2, 3);
+        let matrices = build_projection_matrices(2, 3, &words);
+
+        assert_eq!(matrices.len(), 3);
+        // Level 1: 2 words of length 1, tensor dim = 2 -> (2, 2) pinv
+        assert_eq!(matrices[0].dim(), (2, 2));
+        // Level 2: 1 word of length 2, tensor dim = 4 -> (1, 4) pinv
+        assert_eq!(matrices[1].dim(), (1, 4));
+        // Level 3: 2 words of length 3, tensor dim = 8 -> (2, 8) pinv
+        assert_eq!(matrices[2].dim(), (2, 8));
+    }
+
+    // --- jacobi_svd ---
+
+    #[test]
+    fn test_jacobi_svd_diagonal() {
+        let mat = Array2::from_shape_vec((2, 2), vec![1.0, 0.0, 0.0, 2.0]).expect("valid");
+        let (u, sigmas, vt) = jacobi_svd(&mat);
+
+        // Singular values should be [2, 1] (sorted descending)
+        assert_relative_eq!(sigmas[0], 2.0, epsilon = 1e-10);
+        assert_relative_eq!(sigmas[1], 1.0, epsilon = 1e-10);
+
+        // Reconstruct: U * diag(S) * Vt should equal original
+        let k = sigmas.len();
+        let mut reconstructed: Array2<f64> = Array2::zeros(mat.dim());
+        for i in 0..k {
+            for r in 0..mat.nrows() {
+                for c in 0..mat.ncols() {
+                    reconstructed[[r, c]] += u[[r, i]] * sigmas[i] * vt[[i, c]];
+                }
+            }
+        }
+        for r in 0..mat.nrows() {
+            for c in 0..mat.ncols() {
+                assert_relative_eq!(reconstructed[[r, c]], mat[[r, c]], epsilon = 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn test_jacobi_svd_reconstruction() {
+        let mat =
+            Array2::from_shape_vec((3, 2), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).expect("valid");
+        let (u, sigmas, vt) = jacobi_svd(&mat);
+        let k = sigmas.len();
+        let mut reconstructed: Array2<f64> = Array2::zeros(mat.dim());
+        for i in 0..k {
+            for r in 0..mat.nrows() {
+                for c in 0..mat.ncols() {
+                    reconstructed[[r, c]] += u[[r, i]] * sigmas[i] * vt[[i, c]];
+                }
+            }
+        }
+        for r in 0..mat.nrows() {
+            for c in 0..mat.ncols() {
+                assert_relative_eq!(reconstructed[[r, c]], mat[[r, c]], epsilon = 1e-10);
+            }
+        }
+    }
+
+    // --- outer_flat ---
+
+    #[test]
+    fn test_outer_flat_simple() {
+        let a = Array1::from_vec(vec![1.0, 2.0]);
+        let b = Array1::from_vec(vec![3.0, 4.0]);
+        let result = outer_flat(&a, &b);
+        assert_eq!(result.as_slice().expect("c"), &[3.0, 4.0, 6.0, 8.0]);
+    }
+}
