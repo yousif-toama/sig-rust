@@ -12,46 +12,8 @@ use crate::types::{BatchedLevelList, Depth, Dim, LevelList};
 /// At combined level k: `result[k] = a[k] + b[k] + sum outer(a[i], b[j])`.
 pub fn tensor_multiply(a: &LevelList, b: &LevelList) -> LevelList {
     let m = a.depth();
-    let dim = a.dim();
-    let mut result: Vec<Array1<f64>> = (0..m).map(|k| &a.levels[k] + &b.levels[k]).collect();
-
-    let max_size = result.last().map_or(0, Array1::len);
-    let mut buf = vec![0.0_f64; max_size];
-
-    for (level_k, result_k) in result.iter_mut().enumerate() {
-        for i in 0..=level_k {
-            let j = level_k.wrapping_sub(1).wrapping_sub(i);
-            if j >= m {
-                continue; // j < 0 in the original
-            }
-            let si = a.levels[i].len();
-            let sj = b.levels[j].len();
-            outer_into(&a.levels[i], &b.levels[j], &mut buf[..si * sj]);
-            for (idx, &val) in buf[..si * sj].iter().enumerate() {
-                result_k[idx] += val;
-            }
-        }
-    }
-
-    LevelList::new(result, dim)
-}
-
-/// In-place concatenation product: writes `(1 + a) * (1 + b)` into `result`.
-///
-/// `buf` must be at least as large as the biggest level (d^m elements).
-/// Avoids all allocations when `result` is pre-sized.
-pub fn tensor_multiply_into(
-    a: &LevelList,
-    b: &LevelList,
-    result: &mut LevelList,
-    buf: &mut [f64],
-) {
-    let m = a.depth();
-
-    for k in 0..m {
-        result.levels[k].assign(&a.levels[k]);
-        result.levels[k] += &b.levels[k];
-    }
+    let mut result = a.clone();
+    result.add_assign(b);
 
     for level_k in 0..m {
         for i in 0..=level_k {
@@ -59,19 +21,35 @@ pub fn tensor_multiply_into(
             if j >= m {
                 continue;
             }
-            let si = a.levels[i].len();
-            let sj = b.levels[j].len();
-            outer_into_views(
-                a.levels[i].as_slice().expect("contiguous"),
-                b.levels[j].as_slice().expect("contiguous"),
-                &mut buf[..si * sj],
-            );
-            let result_k = result.levels[level_k]
-                .as_slice_mut()
-                .expect("contiguous");
-            for (idx, &val) in buf[..si * sj].iter().enumerate() {
-                result_k[idx] += val;
+            // We need to borrow a.level(i) and b.level(j) immutably,
+            // but result.level_mut(level_k) mutably. Since a/b are
+            // separate from result, this is fine -- but we need to copy
+            // the input slices first since result borrows are separate.
+            let a_i = a.level(i);
+            let b_j = b.level(j);
+            outer_accumulate(a_i, b_j, result.level_mut(level_k));
+        }
+    }
+
+    result
+}
+
+/// In-place concatenation product: writes `(1 + a) * (1 + b)` into `result`.
+///
+/// Avoids all allocations when `result` is pre-sized.
+pub fn tensor_multiply_into(a: &LevelList, b: &LevelList, result: &mut LevelList) {
+    let m = a.depth();
+    result.set_sum(a, b);
+
+    for level_k in 0..m {
+        for i in 0..=level_k {
+            let j = level_k.wrapping_sub(1).wrapping_sub(i);
+            if j >= m {
+                continue;
             }
+            let a_i = a.level(i);
+            let b_j = b.level(j);
+            outer_accumulate(a_i, b_j, result.level_mut(level_k));
         }
     }
 }
@@ -80,53 +58,99 @@ pub fn tensor_multiply_into(
 pub fn tensor_multiply_nil(a: &LevelList, b: &LevelList) -> LevelList {
     let m = a.depth();
     let dim = a.dim();
-    let mut result: Vec<Array1<f64>> = (0..m).map(|k| Array1::zeros(a.levels[k].len())).collect();
+    let depth = Depth::new(m).expect("m > 0");
+    let mut result = LevelList::zeros(dim, depth);
 
-    let max_size = result.last().map_or(0, Array1::len);
-    let mut buf = vec![0.0_f64; max_size];
-
-    for (level_k, result_k) in result.iter_mut().enumerate() {
+    for level_k in 0..m {
         for i in 0..=level_k {
             let j = level_k.wrapping_sub(1).wrapping_sub(i);
             if j >= m {
                 continue;
             }
-            let si = a.levels[i].len();
-            let sj = b.levels[j].len();
-            outer_into(&a.levels[i], &b.levels[j], &mut buf[..si * sj]);
-            for (idx, &val) in buf[..si * sj].iter().enumerate() {
-                result_k[idx] += val;
-            }
+            outer_accumulate(a.level(i), b.level(j), result.level_mut(level_k));
         }
     }
 
-    LevelList::new(result, dim)
+    result
 }
 
-/// Logarithm in the truncated tensor algebra.
+/// Logarithm in the truncated tensor algebra using Horner's method.
 ///
-/// Given x representing `(1 + x)`, computes `log(1 + x) = x - x^2/2 + x^3/3 - ...`.
+/// Computes `log(1 + x) = x - x*(x/2 - x*(x/3 - ...))` with level truncation.
+/// At nesting depth p, only levels 1..=(m-p) contribute, saving ~50-75% of work.
 pub fn tensor_log(levels: &LevelList) -> LevelList {
     let m = levels.depth();
     let dim = levels.dim();
 
-    // result starts as a copy of x (the n=0 term, coefficient +1)
-    let mut result: Vec<Array1<f64>> = levels.levels.iter().map(Array1::clone).collect();
-
-    // Compute powers inline: prev_power tracks x^(n) using nil multiplication
-    // powers[0] = x (reference to input), powers[n] = x^(n+1)
-    let mut prev_power = levels.clone();
-    for n in 1..m {
-        let next = tensor_multiply_nil(levels, &prev_power);
-        let sign = if n % 2 == 0 { 1.0 } else { -1.0 };
-        let coeff = sign / (n + 1) as f64;
-        for (result_k, power_k) in result.iter_mut().zip(&next.levels) {
-            result_k.scaled_add(coeff, power_k);
-        }
-        prev_power = next;
+    if m <= 1 {
+        return levels.clone();
     }
 
-    LevelList::new(result, dim)
+    // Horner evaluation: log(1+x) = x(1 - x(1/2 - x(1/3 - ...)))
+    // s starts as empty (m-1 levels), t is workspace (m levels)
+    let depth_m_minus_1 = Depth::new(m - 1).expect("m >= 2");
+    let depth_m = Depth::new(m).expect("m >= 1");
+    let mut s = LevelList::zeros(dim, depth_m_minus_1);
+    let mut t = LevelList::zeros(dim, depth_m);
+
+    for depth in (1..=m).rev() {
+        let constant = 1.0 / depth as f64;
+        let max_lev = 1 + m - depth; // how many levels matter at this nesting
+
+        // t = nil_mul(x, s) up to level max_lev (only levels 2..=max_lev)
+        // This does nothing the first iteration (when s is all zeros)
+        for lev in 2..=max_lev {
+            // Zero t at this level
+            t.level_mut(lev - 1).fill(0.0);
+            // Accumulate outer products: sum over left_lev + right_lev = lev
+            for left_lev in 1..lev {
+                let right_lev = lev - left_lev;
+                if right_lev > s.depth() {
+                    continue;
+                }
+                outer_accumulate(
+                    levels.level(left_lev - 1),
+                    s.level(right_lev - 1),
+                    t.level_mut(lev - 1),
+                );
+            }
+        }
+
+        // s = constant * x - t, up to level max_lev
+        if depth > 1 {
+            for lev in 1..=max_lev {
+                let s_slice = s.level_mut(lev - 1);
+                let x_slice = levels.level(lev - 1);
+                if lev == 1 {
+                    // No t contribution at level 1 (tensor product starts at lev 2)
+                    for (si, &xi) in s_slice.iter_mut().zip(x_slice.iter()) {
+                        *si = constant * xi;
+                    }
+                } else {
+                    let t_slice = t.level(lev - 1);
+                    for ((si, &xi), &ti) in
+                        s_slice.iter_mut().zip(x_slice.iter()).zip(t_slice.iter())
+                    {
+                        *si = constant * xi - ti;
+                    }
+                }
+            }
+        }
+    }
+
+    // Final result: x - t (t holds x*s at the last iteration)
+    // Level 1 of result = x level 1 (unchanged)
+    // Levels 2..=m of result = x - t
+    let mut result = levels.clone();
+    for lev in 2..=m {
+        let result_slice = result.level_mut(lev - 1);
+        let t_slice = t.level(lev - 1);
+        for (r, &tv) in result_slice.iter_mut().zip(t_slice.iter()) {
+            *r -= tv;
+        }
+    }
+
+    result
 }
 
 /// Signature of a single linear segment from a slice (truncated exponential).
@@ -136,21 +160,38 @@ pub fn sig_of_segment_from_slice(displacement: &[f64], depth: Depth) -> LevelLis
     let d = displacement.len();
     let dim = Dim::new(d).expect("displacement must be non-empty");
     let m = depth.value();
-    let mut levels: Vec<Array1<f64>> = vec![Array1::from_vec(displacement.to_vec())];
+
+    // Build flat data directly: level 0 = displacement, level k = prev (x) disp / (k+1)
+    let total: usize = (1..=m).map(|k| dim.pow(k)).sum();
+    let mut data = Vec::with_capacity(total);
+    let mut offsets = Vec::with_capacity(m + 1);
+    offsets.push(0);
+
+    // Level 0
+    data.extend_from_slice(displacement);
+    offsets.push(data.len());
 
     for k in 2..=m {
-        let prev = &levels[levels.len() - 1];
-        let mut new_level = Array1::zeros(prev.len() * d);
-        outer_into_views(
-            prev.as_slice().expect("contiguous"),
-            displacement,
-            new_level.as_slice_mut().expect("contiguous"),
-        );
-        new_level /= k as f64;
-        levels.push(new_level);
+        let prev_start = offsets[k - 2];
+        let prev_end = offsets[k - 1];
+        let prev_len = prev_end - prev_start;
+        let new_len = prev_len * d;
+        let scale = 1.0 / k as f64;
+
+        // Reserve space and get pointer to new level
+        let new_start = data.len();
+        data.resize(new_start + new_len, 0.0);
+
+        // We need to read from prev level and write to new level.
+        // Since they don't overlap, we can split the slice.
+        let (prev_part, new_part) = data.split_at_mut(new_start);
+        let prev = &prev_part[prev_start..prev_end];
+        outer_into_scaled(prev, displacement, scale, new_part);
+
+        offsets.push(data.len());
     }
 
-    LevelList::new(levels, dim)
+    LevelList::from_flat_with_offsets(data, offsets, dim)
 }
 
 /// Signature of a single linear segment (truncated exponential).
@@ -176,17 +217,18 @@ pub fn sig_of_segment_batch(displacements: &Array2<f64>, depth: Depth) -> Batche
         let prev_cols = prev.ncols();
         let new_cols = prev_cols * d;
         let mut new_level = Array2::zeros((n, new_cols));
+        let scale = 1.0 / k as f64;
 
         for row in 0..n {
             let prev_row = prev.row(row);
             let disp_row = displacements.row(row);
-            outer_into_views(
+            outer_into_scaled(
                 prev_row.as_slice().expect("contiguous"),
                 disp_row.as_slice().expect("contiguous"),
+                scale,
                 new_level.row_mut(row).as_slice_mut().expect("contiguous"),
             );
         }
-        new_level /= k as f64;
         levels.push(new_level);
     }
 
@@ -195,12 +237,12 @@ pub fn sig_of_segment_batch(displacements: &Array2<f64>, depth: Depth) -> Batche
 
 /// Split a flat signature into a `LevelList`.
 pub fn split_signature(flat: &Array1<f64>, dim: Dim, depth: Depth) -> LevelList {
-    LevelList::from_flat(flat, dim, depth)
+    LevelList::from_flat(flat.as_slice().expect("contiguous"), dim, depth)
 }
 
 /// Concatenate a `LevelList` into a flat array.
 pub fn concat_levels(levels: &LevelList) -> Array1<f64> {
-    levels.to_flat()
+    Array1::from_vec(levels.to_flat())
 }
 
 // ---------------------------------------------------------------------------
@@ -224,17 +266,13 @@ pub fn tensor_multiply_batch(lhs: &BatchedLevelList, rhs: &BatchedLevelList) -> 
             if j >= depth {
                 continue;
             }
-            let si = lhs.levels[i].ncols();
-            let sj = rhs.levels[j].ncols();
-            let mut outer = Array2::zeros((batch, si * sj));
             for row in 0..batch {
-                outer_into_views(
+                outer_accumulate(
                     lhs.levels[i].row(row).as_slice().expect("contiguous"),
                     rhs.levels[j].row(row).as_slice().expect("contiguous"),
-                    outer.row_mut(row).as_slice_mut().expect("contiguous"),
+                    result_k.row_mut(row).as_slice_mut().expect("contiguous"),
                 );
             }
-            *result_k = &*result_k + &outer;
         }
     }
 
@@ -252,28 +290,26 @@ pub fn tensor_multiply_adjoint(
     b: &LevelList,
 ) -> (LevelList, LevelList) {
     let m = a.depth();
-    let dim = a.dim();
-    let mut da: Vec<Array1<f64>> = dresult.levels.clone();
-    let mut db: Vec<Array1<f64>> = dresult.levels.clone();
+    let mut da = dresult.clone();
+    let mut db = dresult.clone();
 
-    for (level_k, dr_level) in dresult.levels.iter().enumerate() {
-        for (i, (da_i, a_level_i)) in da.iter_mut().zip(&a.levels).enumerate().take(level_k + 1) {
+    for level_k in 0..m {
+        for i in 0..=level_k {
             let j = level_k.wrapping_sub(1).wrapping_sub(i);
             if j >= m {
                 continue;
             }
-            let si = a_level_i.len();
-            let sj = b.levels[j].len();
-            // dr reshaped as (si, sj) matrix
-            let dr = dr_level.as_slice().expect("contiguous");
+            let si = a.level_len(i);
+            let sj = b.level_len(j);
+            let dr = dresult.level(level_k);
             // da[i] += dr @ b[j]  (matrix-vector product)
-            matvec_add(dr, si, sj, b.levels[j].as_slice().expect("c"), da_i);
+            matvec_add_slice(dr, si, sj, b.level(j), da.level_mut(i));
             // db[j] += a[i] @ dr  (vector-matrix product)
-            vecmat_add(a_level_i.as_slice().expect("c"), dr, si, sj, &mut db[j]);
+            vecmat_add_slice(a.level(i), dr, si, sj, db.level_mut(j));
         }
     }
 
-    (LevelList::new(da, dim), LevelList::new(db, dim))
+    (da, db)
 }
 
 /// Adjoint of `tensor_multiply_nil`.
@@ -284,32 +320,36 @@ pub fn tensor_multiply_nil_adjoint(
 ) -> (LevelList, LevelList) {
     let m = a.depth();
     let dim = a.dim();
-    let mut da: Vec<Array1<f64>> = (0..m).map(|k| Array1::zeros(a.levels[k].len())).collect();
-    let mut db: Vec<Array1<f64>> = (0..m).map(|k| Array1::zeros(b.levels[k].len())).collect();
+    let depth = Depth::new(m).expect("m > 0");
+    let mut da = LevelList::zeros(dim, depth);
+    let mut db = LevelList::zeros(dim, depth);
 
-    for (level_k, dr_level) in dresult.levels.iter().enumerate() {
-        for (i, (da_i, a_level_i)) in da.iter_mut().zip(&a.levels).enumerate().take(level_k + 1) {
+    for level_k in 0..m {
+        for i in 0..=level_k {
             let j = level_k.wrapping_sub(1).wrapping_sub(i);
             if j >= m {
                 continue;
             }
-            let si = a_level_i.len();
-            let sj = b.levels[j].len();
-            let dr = dr_level.as_slice().expect("contiguous");
-            matvec_add(dr, si, sj, b.levels[j].as_slice().expect("c"), da_i);
-            vecmat_add(a_level_i.as_slice().expect("c"), dr, si, sj, &mut db[j]);
+            let si = a.level_len(i);
+            let sj = b.level_len(j);
+            let dr = dresult.level(level_k);
+            matvec_add_slice(dr, si, sj, b.level(j), da.level_mut(i));
+            vecmat_add_slice(a.level(i), dr, si, sj, db.level_mut(j));
         }
     }
 
-    (LevelList::new(da, dim), LevelList::new(db, dim))
+    (da, db)
 }
 
 /// Adjoint of `tensor_log`.
+///
+/// Uses the naive power series adjoint (correct with Horner forward pass).
 pub fn tensor_log_adjoint(dresult: &LevelList, levels: &LevelList) -> LevelList {
     let m = levels.depth();
     let dim = levels.dim();
+    let depth_val = Depth::new(m).expect("m > 0");
 
-    // Recompute forward powers
+    // Recompute forward powers (naive, for correct adjoint)
     let mut powers: Vec<LevelList> = vec![levels.clone()];
     for _ in 1..m {
         let next = tensor_multiply_nil(levels, powers.last().expect("non-empty"));
@@ -317,34 +357,28 @@ pub fn tensor_log_adjoint(dresult: &LevelList, levels: &LevelList) -> LevelList 
     }
 
     // Direct gradient contribution from each power
-    let mut dpowers: Vec<Vec<Array1<f64>>> = Vec::with_capacity(m);
+    let mut dpowers: Vec<LevelList> = Vec::with_capacity(m);
     for n in 0..m {
         let sign = if n % 2 == 0 { 1.0 } else { -1.0 };
         let coeff = sign / (n + 1) as f64;
-        let dp: Vec<Array1<f64>> = (0..m).map(|k| &dresult.levels[k] * coeff).collect();
+        let mut dp = LevelList::zeros(dim, depth_val);
+        for (d, &r) in dp.data_mut().iter_mut().zip(dresult.data().iter()) {
+            *d = r * coeff;
+        }
         dpowers.push(dp);
     }
 
     // Backprop through chain: powers[n] = nil_mul(x, powers[n-1])
-    let mut dx: Vec<Array1<f64>> = (0..m)
-        .map(|k| Array1::zeros(levels.levels[k].len()))
-        .collect();
+    let mut dx = LevelList::zeros(dim, depth_val);
 
     for n in (1..m).rev() {
-        let dp_level_list = LevelList::new(dpowers[n].clone(), dim);
-        let (da, db) = tensor_multiply_nil_adjoint(&dp_level_list, levels, &powers[n - 1]);
-        for k in 0..m {
-            dx[k] += &da.levels[k];
-            dpowers[n - 1][k] += &db.levels[k];
-        }
+        let (da, db) = tensor_multiply_nil_adjoint(&dpowers[n], levels, &powers[n - 1]);
+        dx.add_assign(&da);
+        dpowers[n - 1].add_assign(&db);
     }
 
-    // dpowers[0] is the accumulated gradient for powers[0] = x
-    for k in 0..m {
-        dx[k] += &dpowers[0][k];
-    }
-
-    LevelList::new(dx, dim)
+    dx.add_assign(&dpowers[0]);
+    dx
 }
 
 /// Adjoint of `sig_of_segment`: gradient w.r.t. displacement.
@@ -355,48 +389,45 @@ pub fn sig_of_segment_adjoint(
 ) -> Array1<f64> {
     let d = displacement.len();
     let m = depth.value();
-    let h = displacement;
+    let h = displacement.as_slice().expect("contiguous");
 
-    // Recompute forward levels
-    let mut levels: Vec<Array1<f64>> = vec![h.clone()];
+    // Recompute forward levels as flat vecs
+    let mut level_data: Vec<Vec<f64>> = vec![h.to_vec()];
     for k in 2..=m {
-        let prev = &levels[levels.len() - 1];
-        let mut new_level = Array1::zeros(prev.len() * d);
-        outer_into(prev, h, new_level.as_slice_mut().expect("contiguous"));
-        new_level /= k as f64;
-        levels.push(new_level);
+        let prev = &level_data[level_data.len() - 1];
+        let mut new_level = vec![0.0; prev.len() * d];
+        outer_into_views(prev, h, &mut new_level);
+        let scale = 1.0 / k as f64;
+        for v in &mut new_level {
+            *v *= scale;
+        }
+        level_data.push(new_level);
     }
 
-    let mut dlevel: Vec<Array1<f64>> = dresult.levels.clone();
-    let mut dh = Array1::zeros(d);
+    // Copy dresult levels into mutable vecs for backward pass
+    let mut dlevel: Vec<Vec<f64>> = (0..m).map(|k| dresult.level(k).to_vec()).collect();
+    let mut dh = vec![0.0; d];
 
     for k in (1..m).rev() {
         let divisor = (k + 1) as f64;
-        let scaled: Array1<f64> = &dlevel[k] / divisor;
         let size_prev = d.pow(k as u32);
 
+        // Scale dlevel[k] by 1/divisor
+        let scaled: Vec<f64> = dlevel[k].iter().map(|&v| v / divisor).collect();
+
         // dlevel[k-1] += mat @ h
-        let mat = scaled.as_slice().expect("contiguous");
-        matvec_add(
-            mat,
-            size_prev,
-            d,
-            h.as_slice().expect("c"),
-            &mut dlevel[k - 1],
-        );
+        matvec_add_slice(&scaled, size_prev, d, h, &mut dlevel[k - 1]);
 
         // dh += levels[k-1] @ mat
-        vecmat_add(
-            levels[k - 1].as_slice().expect("c"),
-            mat,
-            size_prev,
-            d,
-            &mut dh,
-        );
+        vecmat_add_slice(&level_data[k - 1], &scaled, size_prev, d, &mut dh);
     }
 
-    dh += &dlevel[0];
-    dh
+    // dlevel[0] contributes directly to dh
+    for (dh_i, &dl) in dh.iter_mut().zip(dlevel[0].iter()) {
+        *dh_i += dl;
+    }
+
+    Array1::from_vec(dh)
 }
 
 /// Batched adjoint of `sig_of_segment`.
@@ -415,14 +446,15 @@ pub fn sig_of_segment_adjoint_batch(
         let prev_cols = prev.ncols();
         let new_cols = prev_cols * d;
         let mut new_level = Array2::zeros((n, new_cols));
+        let scale = 1.0 / k as f64;
         for row in 0..n {
-            outer_into_views(
+            outer_into_scaled(
                 prev.row(row).as_slice().expect("c"),
                 displacements.row(row).as_slice().expect("c"),
+                scale,
                 new_level.row_mut(row).as_slice_mut().expect("c"),
             );
         }
-        new_level /= k as f64;
         levels.push(new_level);
     }
 
@@ -435,23 +467,26 @@ pub fn sig_of_segment_adjoint_batch(
         let size_prev = d.pow(k as u32);
 
         for row in 0..n {
-            let mat_vec: Vec<f64> = scaled.row(row).to_vec();
-            let h_vec: Vec<f64> = displacements.row(row).to_vec();
-            let prev_vec: Vec<f64> = levels[k - 1].row(row).to_vec();
+            let scaled_row = scaled.row(row);
+            let mat = scaled_row.as_slice().expect("c");
+            let disp_row = displacements.row(row);
+            let h = disp_row.as_slice().expect("c");
+            let prev_row = levels[k - 1].row(row);
+            let prev = prev_row.as_slice().expect("c");
 
             // dlevel[k-1][row] += mat @ h
             matvec_add_slice(
-                &mat_vec,
+                mat,
                 size_prev,
                 d,
-                &h_vec,
+                h,
                 dlevel[k - 1].row_mut(row).as_slice_mut().expect("c"),
             );
 
             // dh[row] += prev @ mat
             vecmat_add_slice(
-                &prev_vec,
-                &mat_vec,
+                prev,
+                mat,
                 size_prev,
                 d,
                 dh.row_mut(row).as_slice_mut().expect("c"),
@@ -468,52 +503,50 @@ pub fn sig_of_segment_adjoint_batch(
 // Helper: outer product, matvec, vecmat
 // ---------------------------------------------------------------------------
 
-/// Compute outer product `a (x) b` and write into flat buffer.
-fn outer_into(a: &Array1<f64>, b: &Array1<f64>, out: &mut [f64]) {
-    let a_slice = a.as_slice().expect("contiguous");
-    let b_slice = b.as_slice().expect("contiguous");
-    outer_into_views(a_slice, b_slice, out);
-}
-
 /// Compute outer product from slices.
 fn outer_into_views(a: &[f64], b: &[f64], out: &mut [f64]) {
-    let sb = b.len();
-    for (i, &av) in a.iter().enumerate() {
-        let start = i * sb;
-        for (j, &bv) in b.iter().enumerate() {
-            out[start + j] = av * bv;
+    for (&av, chunk) in a.iter().zip(out.chunks_exact_mut(b.len())) {
+        for (o, &bv) in chunk.iter_mut().zip(b.iter()) {
+            *o = av * bv;
+        }
+    }
+}
+
+/// Compute outer product and ADD to result (fused, no intermediate buffer).
+fn outer_accumulate(a: &[f64], b: &[f64], result: &mut [f64]) {
+    for (&av, chunk) in a.iter().zip(result.chunks_exact_mut(b.len())) {
+        for (r, &bv) in chunk.iter_mut().zip(b.iter()) {
+            *r += av * bv;
+        }
+    }
+}
+
+/// Compute scaled outer product: out[i,j] = a[i] * b[j] * scale.
+fn outer_into_scaled(a: &[f64], b: &[f64], scale: f64, out: &mut [f64]) {
+    for (&av, chunk) in a.iter().zip(out.chunks_exact_mut(b.len())) {
+        let scaled_av = av * scale;
+        for (o, &bv) in chunk.iter_mut().zip(b.iter()) {
+            *o = scaled_av * bv;
         }
     }
 }
 
 /// `result += mat @ vec` where mat is `(rows, cols)` stored flat.
-fn matvec_add(mat: &[f64], rows: usize, cols: usize, vec: &[f64], result: &mut Array1<f64>) {
-    let r = result.as_slice_mut().expect("contiguous");
-    matvec_add_slice(mat, rows, cols, vec, r);
-}
-
-fn matvec_add_slice(mat: &[f64], rows: usize, cols: usize, vec: &[f64], result: &mut [f64]) {
-    for (i, result_i) in result.iter_mut().enumerate().take(rows) {
-        let row_start = i * cols;
+fn matvec_add_slice(mat: &[f64], _rows: usize, cols: usize, vec: &[f64], result: &mut [f64]) {
+    for (result_i, mat_row) in result.iter_mut().zip(mat.chunks_exact(cols)) {
         let mut sum = 0.0;
-        for j in 0..cols {
-            sum += mat[row_start + j] * vec[j];
+        for (&m, &v) in mat_row.iter().zip(vec.iter()) {
+            sum += m * v;
         }
         *result_i += sum;
     }
 }
 
 /// `result += vec @ mat` where mat is `(rows, cols)` stored flat.
-fn vecmat_add(vec: &[f64], mat: &[f64], rows: usize, cols: usize, result: &mut Array1<f64>) {
-    let r = result.as_slice_mut().expect("contiguous");
-    vecmat_add_slice(vec, mat, rows, cols, r);
-}
-
-fn vecmat_add_slice(vec: &[f64], mat: &[f64], rows: usize, cols: usize, result: &mut [f64]) {
-    for (i, &vi) in vec.iter().enumerate().take(rows) {
-        let row_start = i * cols;
-        for j in 0..cols {
-            result[j] += vi * mat[row_start + j];
+fn vecmat_add_slice(vec: &[f64], mat: &[f64], _rows: usize, cols: usize, result: &mut [f64]) {
+    for (&vi, mat_row) in vec.iter().zip(mat.chunks_exact(cols)) {
+        for (r, &m) in result.iter_mut().zip(mat_row.iter()) {
+            *r += vi * m;
         }
     }
 }

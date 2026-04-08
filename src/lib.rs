@@ -1,4 +1,5 @@
 pub mod algebra;
+pub mod bch;
 pub mod error;
 pub mod types;
 

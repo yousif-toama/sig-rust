@@ -70,28 +70,23 @@ pub fn sig_levels(path: &Array2<f64>, depth: Depth) -> LevelList {
     }
 
     // Compute displacements via vectorized subtraction
-    let displacements =
-        &path.slice(ndarray::s![1.., ..]) - &path.slice(ndarray::s![..n - 1, ..]);
+    let displacements = &path.slice(ndarray::s![1.., ..]) - &path.slice(ndarray::s![..n - 1, ..]);
 
     let num_segs = n - 1;
 
     // Sequential left-fold with double buffering to avoid allocations
-    let mut acc = sig_of_segment_from_slice(
-        displacements.row(0).as_slice().expect("contiguous"),
-        depth,
-    );
+    let mut acc =
+        sig_of_segment_from_slice(displacements.row(0).as_slice().expect("contiguous"), depth);
 
     if num_segs > 1 {
         let mut temp = LevelList::zeros(dim, depth);
-        let max_level_size = dim.pow(depth.value());
-        let mut buf = vec![0.0_f64; max_level_size];
 
         for i in 1..num_segs {
             let seg = sig_of_segment_from_slice(
                 displacements.row(i).as_slice().expect("contiguous"),
                 depth,
             );
-            tensor_multiply_into(&acc, &seg, &mut temp, &mut buf);
+            tensor_multiply_into(&acc, &seg, &mut temp);
             std::mem::swap(&mut acc, &mut temp);
         }
     }
@@ -111,29 +106,24 @@ pub fn sig_cumulative(path: &Array2<f64>, depth: Depth) -> Array2<f64> {
     }
 
     // Compute displacements via vectorized subtraction
-    let displacements =
-        &path.slice(ndarray::s![1.., ..]) - &path.slice(ndarray::s![..n - 1, ..]);
+    let displacements = &path.slice(ndarray::s![1.., ..]) - &path.slice(ndarray::s![..n - 1, ..]);
 
     let mut result = Array2::zeros((n - 1, sl));
 
     // Sequential accumulation with double buffering
-    let mut acc = sig_of_segment_from_slice(
-        displacements.row(0).as_slice().expect("contiguous"),
-        depth,
-    );
+    let mut acc =
+        sig_of_segment_from_slice(displacements.row(0).as_slice().expect("contiguous"), depth);
     result.row_mut(0).assign(&concat_levels(&acc));
 
     if n > 2 {
         let mut temp = LevelList::zeros(dim, depth);
-        let max_level_size = dim.pow(depth.value());
-        let mut buf = vec![0.0_f64; max_level_size];
 
         for i in 1..n - 1 {
             let seg = sig_of_segment_from_slice(
                 displacements.row(i).as_slice().expect("contiguous"),
                 depth,
             );
-            tensor_multiply_into(&acc, &seg, &mut temp, &mut buf);
+            tensor_multiply_into(&acc, &seg, &mut temp);
             std::mem::swap(&mut acc, &mut temp);
             result.row_mut(i).assign(&concat_levels(&acc));
         }

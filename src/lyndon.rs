@@ -262,7 +262,7 @@ pub fn jacobi_svd(mat: &Array2<f64>) -> (Array2<f64>, Vec<f64>, Array2<f64>) {
 }
 
 /// Flat outer product of two 1D arrays.
-fn outer_flat(a: &Array1<f64>, b: &Array1<f64>) -> Array1<f64> {
+pub(crate) fn outer_flat(a: &Array1<f64>, b: &Array1<f64>) -> Array1<f64> {
     let mut result = Array1::zeros(a.len() * b.len());
     let out = result.as_slice_mut().expect("contiguous");
     let a_s = a.as_slice().expect("contiguous");

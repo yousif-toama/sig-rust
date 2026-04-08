@@ -98,7 +98,7 @@ pub fn sigscale(
     let mut result_flat: Vec<f64> = Vec::with_capacity(sig_flat.len());
 
     for k in 1..=m {
-        let level = &levels.levels[k - 1];
+        let level = levels.level(k - 1);
         let scale_k = build_scale_tensor(scales.as_slice().expect("c"), d, k);
 
         for (i, &lv) in level.iter().enumerate() {
@@ -130,21 +130,22 @@ pub fn sigscalebackprop(
     let mut dscales = Array1::zeros(d);
 
     for k in 1..=m {
-        let product: Array1<f64> = &deriv_levels.levels[k - 1] * &sig_levels.levels[k - 1];
+        let deriv_level = deriv_levels.level(k - 1);
+        let sig_level = sig_levels.level(k - 1);
         let scale_k = build_scale_tensor(scales_slice, d, k);
 
-        // Product * scale_k, then for each position, compute contribution
-        let scaled_product: Vec<f64> = product
+        // Element-wise product * scale
+        let scaled_product: Vec<f64> = deriv_level
             .iter()
+            .zip(sig_level.iter())
             .zip(scale_k.iter())
-            .map(|(&p, &s)| p * s)
+            .map(|((&dl, &sl), &sk)| dl * sl * sk)
             .collect();
 
         // For each position pos in the k-fold index
         for pos in 0..k {
             let stride_before: usize = d.pow(pos as u32);
             let stride_after: usize = d.pow((k - 1 - pos) as u32);
-            let block_size = stride_before * d * stride_after;
 
             for dim_idx in 0..d {
                 let mut contribution = 0.0;
@@ -157,7 +158,6 @@ pub fn sigscalebackprop(
                 if scales_slice[dim_idx].abs() > 0.0 {
                     dscales[dim_idx] += contribution / scales_slice[dim_idx];
                 }
-                let _ = block_size;
             }
         }
     }
